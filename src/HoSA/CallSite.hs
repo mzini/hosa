@@ -46,7 +46,7 @@ type CSAbstract f = CallSite f -> CallCtx f -> CallCtx f
 
 kca :: Eq f => Int -> CSAbstract f
 kca n (CallSite f i) (CallCtx g j css)
-  | n <= 0 && f == g = CallCtx f 0 []
+  | n <= 0 = CallCtx f 0 []
   | otherwise = CallCtx f i (take (n - 1) css)
 
 
@@ -71,7 +71,7 @@ instance PP.Pretty f => PP.Pretty (CallCtx f) where
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (AnnotatedRule f v) where
   pretty rl = PP.pretty (ruleEnv rl)
-    PP.<+> PP.text "|-"
+    PP.<+> PP.text "⊢"
     PP.</> PP.hang 2 (rule PP.<+> PP.text ":" PP.<+> PP.pretty (ruleType rl))
     where
       rule = prettyATerm (lhs rl) PP.<+> PP.text "->" PP.</> prettyATerm (arhs rl)

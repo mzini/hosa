@@ -28,6 +28,7 @@ module HoSA.Utils (
   , runLog
 ) where
 
+import System.IO (hPutStrLn, Handle, stderr)
 import           Control.Monad.Supply
 import           Control.Monad.State
 import           Control.Monad.Writer
@@ -65,6 +66,9 @@ ppSeq s (a:as) = PP.align (a PP.<//> PP.cat [s PP.<> a' | a' <- as])
 putDocLn :: PP.Pretty e => e -> IO ()
 putDocLn = putStrLn . renderPretty
 
+hPutDocLn :: PP.Pretty e => Handle -> e -> IO ()
+hPutDocLn h = hPutStrLn h . renderPretty
+
 renderPretty :: PP.Pretty e => e -> String
 renderPretty d = PP.displayS (PP.renderSmart 1.0 80 (PP.pretty d)) ""
 
@@ -92,10 +96,11 @@ runLog = runIdentity . runLogT
 logMessage :: (MonadIO m, PP.Pretty e) => e -> LogT m ()
 logMessage e = do
   i <- get
-  liftIO (putDocLn (PP.indent i (PP.pretty e)))
+  liftIO (hPutDocLn stderr (PP.indent (i*2) (PP.pretty e)))
 
 logBlock :: (MonadIO m, PP.Pretty e) => e -> LogT m a -> LogT m a
 logBlock e m = scoped $ logMessage e >> modify succ >> m
+
 
 -- uniques
 

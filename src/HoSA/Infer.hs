@@ -68,7 +68,7 @@ logBlk :: (PP.Pretty e) => e -> InferM f v a -> InferM f v a
 logBlk e (InferM m) = InferM (logBlock e m)
 
 record :: Constraint -> InferM f v ()
-record cs = tell [cs] >> logMsg cs
+record cs = tell [cs] >> logMsg (PP.text "〈" PP.<> PP.pretty cs PP.<> PP.text "〉")
 
 -- errors
 --------------------------------------------------------------------------------
@@ -143,10 +143,13 @@ abstractSchema width = runUniqueT . annotate . declToType
         return (fvsn `Set.union` nvsp,pvsp, TyArr n' p')        
 
 
-abstractSignature :: (Ord f) => ST.Signature f -> CSAbstract f -> Int -> [f] -> [AnnotatedRule f v]
+abstractSignature :: (PP.Pretty f, Ord f) => ST.Signature f -> CSAbstract f -> Int -> [f] -> [AnnotatedRule f v]
                      -> InferM f v (Signature f Ix.Term)
 abstractSignature ssig abstr width fs ars =
-  signatureFromList <$> sequence [ (cc,) <$> maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
+  logBlk "Abstract Signature" $ 
+  signatureFromList <$> sequence [ do s <- maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
+                                      logMsg (PP.pretty "∑" PP.<> PP.parens (PP.pretty f) PP.<+> PP.text "↦" PP.<+> PP.pretty s)
+                                      return (cc,s)
                                  | cc@(CallCtx f _ _) <- ccs ]
   where
     ccs = callContexts abstr ars [initialCC f | f <- fs]
@@ -222,29 +225,34 @@ instantiate fvs (TyQArr ixs n p) = do
   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm fvs | ix <- ixs]
   return (TyArr (Ix.inst s n) (Ix.inst s p))
 
-  
-subtypeOf :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ()
-TyBase bt1 ix1 `subtypeOf` TyBase bt2 ix2
-  | bt1 == bt2 = record (ix2 :>=: ix1)
-TyArr n p `subtypeOf` TyArr m q = do
-  m `subtypeOf` n
-  p `subtypeOf` q
-s@TyQArr{} `subtypeOf` t@TyArr{} = do
-  (_, t') <- matrix s
-  t' `subtypeOf` t
-t@TyArr{} `subtypeOf` s@TyQArr{} = do
-  t' <- instantiate (fvars t) s
-  t `subtypeOf` t'
-_ `subtypeOf` _ = error "subtypeOf: incompatible types"
 
-infer :: Ord v => TypingContext v -> TypedTerm f v -> InferM f v (Type Ix.Term)
-infer ctx t@(aform -> (h,rest)) = do
+subtypeOf :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ()
+t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2
+
+subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ()
+TyBase bt1 ix1 `subtypeOf_` TyBase bt2 ix2
+  | bt1 == bt2 = record (ix2 :>=: ix1)
+TyArr n p `subtypeOf_` TyArr m q = do
+  m `subtypeOf_` n
+  p `subtypeOf_` q
+s@TyQArr{} `subtypeOf_` t@TyArr{} = do
+  (_, t') <- matrix s
+  t' `subtypeOf_` t
+t@TyArr{} `subtypeOf_` s@TyQArr{} = do
+  t' <- instantiate (fvars t) s
+  t `subtypeOf_` t'
+_ `subtypeOf_` _ = error "subtypeOf_: incompatible types"
+
+infer :: (PP.Pretty f, PP.Pretty v, Ord v) => TypingContext v -> TypedTerm f v -> InferM f v (Type Ix.Term)
+infer ctx t@(aform -> (h,rest)) =
+  logBlk (PP.text "infer" PP.<+> prettyATerm (unType t) PP.<> PP.text ":") $ do
   (ixs,hType) <- tpeOf h >>= matrix
   argInferred <- infer ctx `mapM` rest
-  (argRequired,retType) <- assertJust (IlltypedTerm t "too many arguments supplied")
-    (uncurryUpto hType (length rest))
+  (argRequired,retType) <- assertJust (IlltypedTerm t "too many args") (uncurryUpto hType (length rest))
   subst <- toSkolemSubst (estimateInstVars ixs argRequired argInferred)
+  logMsg (PP.text "∑" PP.<> PP.parens (prettyATerm (unType h)) PP.<+> PP.text "▹" PP.<+> PP.pretty (subst `Ix.o` hType))
   zipWithM subtypeOf (subst `Ix.o` argRequired) argInferred
+  logMsg (PP.text "Γ ⊦" PP.<+> prettyATerm (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty (subst `Ix.o` retType))
   return (subst `Ix.o` retType)
     where
       tpeOf (Var v) = assertJust (IllformedRhs t) (Map.lookup v ctx)
@@ -271,19 +279,21 @@ generateConstraints abstr width startSymbols sttrs = do
         cs = nub $ RS.funs rs \\ ds
         fs = fromMaybe ds startSymbols ++ cs
     sig <- abstractSignature (ST.signature sttrs) abstr width fs ars
-    -- orientation constraints
-    os <- obligations abstr sig ars
-    forM os $ \ o@(ctx :- t ::: tp) -> do
-      logBlk o $ do
-        tp' <- infer ctx t
-        tp' `subtypeOf` tp
-    -- size constraints on constructors
-    let css = [ s | (CallCtx c _ _,s) <- signatureToList sig, c `elem` cs ]
-    forM css $ \ s -> do
-      ix <- returnIndex s
-      let fvars = [Ix.fvar v | v <- Ix.fvars ix]
-      record (ix :>=: Ix.ixSum (Ix.ixSucc Ix.ixZero : fvars))
-    return sig
+    
+    logBlk "Orientation constraints" $ do 
+      os <- obligations abstr sig ars
+      forM os $ \ o@(ctx :- t ::: tp) -> do
+        logBlk o $ do
+          tp' <- infer ctx t
+          tp' `subtypeOf` tp
+
+    logBlk "Constructor constraints" $ do
+      let css = [ s | (CallCtx c _ _,s) <- signatureToList sig, c `elem` cs ]
+      forM css $ \ s -> do
+        ix <- returnIndex s
+        let fvars = [Ix.fvar v | v <- Ix.fvars ix]
+        record (ix :>=: Ix.ixSum (Ix.ixSucc Ix.ixZero : fvars))
+      return sig
   case res of
     Left e -> return (Left e)
     Right (s,cs) -> return (Right (s,ars,cs))
@@ -293,12 +303,12 @@ generateConstraints abstr width startSymbols sttrs = do
 
 instance PP.Pretty v => PP.Pretty (TypingContext v) where
   pretty m
-    | Map.null m = PP.empty
+    | Map.null m = PP.text "Ø"
     | otherwise = PP.hcat $ PP.punctuate (PP.text ", ")
       [ PP.pretty v PP.<+> PP.text ":" PP.<+> PP.pretty s | (v,s) <- Map.toList m ]
   
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Obligation f v) where
   pretty (ctx :- t ::: s) =
     PP.pretty ctx
-    PP.<+> PP.text ":-" PP.<+> prettyATerm (unType t)
+    PP.<+> PP.text "⊦" PP.<+> prettyATerm (unType t)
     PP.<+> PP.text ":" PP.<+> PP.pretty s

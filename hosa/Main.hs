@@ -36,15 +36,71 @@ defaultConfig =
        , clength = 1 &= help "length of call-site contexts" }
   &= help "Infer size-types for given ATRS"
 
-
-abstraction :: HoSA -> C.CSAbstract String
+abstraction :: HoSA -> C.CSAbstract Symbol
 abstraction cfg = C.kca (clength cfg)
 
 data Error = ParseError P.ProblemParseError
            | SimpleTypeError String
-           | SizeTypeError (I.TypingError String String)
+           | SizeTypeError (I.TypingError Symbol Var)
            | ConstraintUnsolvable
            | NonSimpleApplicative (String,Int)
+
+type RunM = ExceptT Error IO    
+
+newtype Symbol = Symbol String deriving (Eq, Ord, Show)
+newtype Var = Var String deriving (Eq, Ord, Show)
+
+type Rule = R.ARule Symbol Var
+type STATRS = ST.STAtrs Symbol Var
+
+fromFile :: HoSA -> RunM [Rule]
+fromFile cfg = do
+  p <- lift (P.fromFile (input cfg) (`elem` ["app","@","."]))
+  rs <- assertRight ParseError (P.allRules <$> P.rules <$> p)
+  let ts = T.withArity `map` (RS.lhss rs ++ RS.rhss rs)
+  case listToMaybe [ p | p <- foldr T.funsDL [] ts , snd p > 0 ] of
+    Nothing -> return (R.mapSides (T.amap Symbol Var) `map` rs)
+    Just p -> throwError (NonSimpleApplicative p)
+
+inferSimpleTypes :: [Rule] -> RunM STATRS
+inferSimpleTypes = assertRight SimpleTypeError . ST.fromATRS
+
+generateConstraints :: HoSA -> STATRS -> RunM (SzT.Signature Symbol Ix.Term, [C.AnnotatedRule Symbol Var], [Ix.Constraint])
+generateConstraints cfg stars = 
+  lift (I.generateConstraints (abstraction cfg) (width cfg) (map Symbol <$> mainIs cfg) stars)
+  >>= assertRight SizeTypeError
+  
+solveConstraints :: HoSA -> SzT.Signature Symbol Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature Symbol (S.Polynomial Integer))
+solveConstraints cfg asig cs =
+  S.solveConstraints (solver cfg) asig cs
+  >>= assertJust ConstraintUnsolvable
+
+status :: PP.Pretty e => String -> e -> RunM ()
+status n e = lift (putDocLn (PP.text n PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
+
+run :: IO (Either Error ())
+run = runExceptT $ do
+  cfg <- lift (cmdArgs defaultConfig)
+  atrs <- fromFile cfg >>= inferSimpleTypes
+  (asig,ars,cs) <- generateConstraints cfg atrs
+  status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
+                            PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.signature atrs)))
+  sig <- solveConstraints cfg asig cs
+  status "Signature" sig
+  return ()
+
+main :: IO ()
+main = run >>= exit where
+  exit (Left e@SizeTypeError{}) = putDocLn e >> exitWith ExitSuccess
+  exit (Left e) = putDocLn e >> exitWith (ExitFailure (-1))
+  exit _ = exitWith ExitSuccess
+
+
+-- pretty printers
+instance PP.Pretty Symbol where pretty (Symbol n) = PP.bold (PP.text n)
+instance PP.Pretty Var where pretty (Var n) = PP.text n
+
+
 
 instance PP.Pretty Error where
   pretty (ParseError e) =
@@ -64,61 +120,5 @@ instance PP.Pretty Error where
   pretty (NonSimpleApplicative (f,i)) =
     PP.text "ATRS contains non-constant symbol"
     PP.<+> PP.squotes (PP.text f) PP.<+> PP.text "of arity" PP.<+> PP.int i
-    
 
-type RunM = ExceptT Error IO
-
-getConfig :: RunM HoSA
-getConfig = lift (cmdArgs defaultConfig)
-
--- curryAtrs :: [R.ARule String String] -> [R.ARule String String]
--- curryAtrs = map (R.mapSides curryTerm) where
---   curryTerm = undefined
-
-fromFile :: HoSA -> RunM [R.ARule String String]
-fromFile cfg = do
-  p <- lift (P.fromFile (input cfg) (`elem` ["app","@","."]))
-  rs <- assertRight ParseError (P.allRules <$> P.rules <$> p)
-  let ts = T.withArity `map` (RS.lhss rs ++ RS.rhss rs)
-  case listToMaybe [ p | p <- foldr T.funsDL [] ts , snd p > 0 ] of
-    Nothing -> return rs
-    Just p -> throwError (NonSimpleApplicative p)
-
-inferSimpleTypes :: [R.ARule String String] -> RunM (ST.STAtrs String String)
-inferSimpleTypes = assertRight SimpleTypeError . ST.fromATRS
-
-generateConstraints :: HoSA -> ST.STAtrs String String -> RunM (SzT.Signature String Ix.Term, [C.AnnotatedRule String String], [Ix.Constraint])
-generateConstraints cfg ars = 
-  lift (I.generateConstraints (abstraction cfg) (width cfg) (mainIs cfg) ars)
-  >>= assertRight SizeTypeError
-  
-solveConstraints :: HoSA -> SzT.Signature String Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature String (S.Polynomial Integer))
-solveConstraints cfg asig cs =
-  S.solveConstraints (solver cfg) asig cs
-  >>= assertJust ConstraintUnsolvable
-
--- instance PP.Pretty String where pretty = PP.text
-
-status :: PP.Pretty e => String -> e -> RunM ()
-status n e = lift (putDocLn (PP.text n PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
-
-run :: IO (Either Error ())
-run = runExceptT $ do
-  cfg <- getConfig 
-  atrs <- fromFile cfg >>= inferSimpleTypes
-  (asig,ars,cs) <- generateConstraints cfg atrs
-  status "Considered ATRS" (PP.pretty ars
-                            PP.<$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.signature atrs)))
-  status "Abstract Signature" asig
-  status "Generated Constraints" cs
-  sig <- solveConstraints cfg asig cs
-  status "Signature" sig
-  return ()
-
-main :: IO ()
-main = run >>= exit where
-  exit (Left e@SizeTypeError{}) = putDocLn e >> exitWith ExitSuccess
-  exit (Left e) = putDocLn e >> exitWith (ExitFailure (-1))
-  exit _ = exitWith ExitSuccess
-  
 
