@@ -21,6 +21,10 @@ toCS cs = [ gterm l GUBS.:>=: gterm r | l :>=: r <- cs ] where --todo simplifica
   gterm (Var (FVar v)) =  GUBS.Var v
   gterm (Var (BVar v)) =  error "toCS: constraint list contains bound variable"
   gterm (Fun f ixs) = GUBS.Fun f (gterm `map` ixs)
+  gterm (MVar mv) =
+    case unsafePeakVar mv of
+      Left _ -> error "toCS: unset meta variable"
+      Right t -> gterm t
 
 
 interpretIx :: (Eq c, Num c) => Interpretation c -> Term -> Polynomial c

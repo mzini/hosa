@@ -21,13 +21,14 @@ import HoSA.Index (Constraint(..))
 import qualified HoSA.Index as Ix
 import           HoSA.SizeType
 import HoSA.Utils
+import Data.Either (rights)
+import qualified Constraints.Set.Solver as SetSolver
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 
 --------------------------------------------------------------------------------
--- inference monad
+-- common types
 --------------------------------------------------------------------------------
-
 type TypingContext v = Map v (Schema Ix.Term)
 
 type Footprint f v = (TypingContext v, Type Ix.Term)
@@ -35,39 +36,63 @@ type Footprint f v = (TypingContext v, Type Ix.Term)
 data Obligation f v = TypingContext v :- (TypedTerm f v ::: Type Ix.Term)
 infixl 0 :-
 
-
 type TypedTerm f v = ATerm (f ::: Schema Ix.Term) v
 
 unType :: TypedTerm f v -> ATerm f v
 unType = amap drp id where drp (f ::: _) = f
 
 
+--------------------------------------------------------------------------------
+-- inference monad
+--------------------------------------------------------------------------------
+
+class (MonadIO m, MonadError (TypingError f v) m) => InferMonad m f v where
+  uniqueID :: m Unique
+  logMsg :: (PP.Pretty e) => e -> m ()
+  logBlk :: (PP.Pretty e) => e -> m a -> m a
+
+uniqueSym :: InferMonad m f v => m Ix.Sym
+uniqueSym = Ix.Sym Nothing <$> uniqueID
+
+uniqueVar :: InferMonad m f v => m Ix.VarId
+uniqueVar = uniqueToInt <$> uniqueID
+
 newtype InferM f v a =
-  InferM { runInferM_ :: LogT (WriterT [Ix.Constraint] (ExceptT (TypingError f v) (UniqueT IO))) a }
+  InferM { runInferM_ :: LogT (ExceptT (TypingError f v) (UniqueT IO)) a }
   deriving (Applicative, Functor, Monad
-            , MonadWriter [Ix.Constraint]
             , MonadError (TypingError f v)
             , MonadIO)
 
-runInferM :: InferM f v a -> IO (Either (TypingError f v) (a,[Constraint]))
-runInferM = runUniqueT . runExceptT . runWriterT . runLogT . runInferM_
+runInferM :: InferM f v a -> IO (Either (TypingError f v) a)
+runInferM = runUniqueT . runExceptT . runLogT . runInferM_
 
-uniqueID :: InferM f v Unique
-uniqueID = InferM (lift (lift (lift unique)))
+instance InferMonad (InferM f v) f v where
+  uniqueID = InferM (lift (lift unique))
+  logMsg e = InferM (logMessage e)
+  logBlk e (InferM m) = InferM (logBlock e m)
 
-uniqueSym :: InferM f v Ix.Sym
-uniqueSym = Ix.Sym Nothing <$> uniqueID
+  
+newtype InferCG f v a = InferCG { runInferCG_ :: WriterT [Constraint] (InferM f v) a }
+  deriving (Applicative, Functor, Monad
+            , MonadError (TypingError f v)
+            , MonadWriter [Constraint]
+            , MonadIO)
 
-uniqueVar :: InferM f v Ix.VarId
-uniqueVar = uniqueToInt <$> uniqueID
+instance InferMonad (InferCG f v) f v where
+  uniqueID = InferCG (lift uniqueID)
+  logMsg e = InferCG (lift (logMsg e))
+  logBlk e (InferCG m) = InferCG $ do
+    (a,w) <- lift (logBlk e (runWriterT m))
+    tell w
+    return a
 
-logMsg :: (PP.Pretty e) => e -> InferM f v ()
-logMsg e = InferM (logMessage e)
+execInferCG ::InferCG f v a -> InferM f v [Constraint]
+execInferCG = execWriterT . runInferCG_
 
-logBlk :: (PP.Pretty e) => e -> InferM f v a -> InferM f v a
-logBlk e (InferM m) = InferM (logBlock e m)
-
-record :: Constraint -> InferM f v ()
+liftInferM ::InferM f v a -> InferCG f v a
+liftInferM = InferCG . lift
+  
+record :: Constraint -> InferCG f v ()
 record cs = tell [cs] >> logMsg (PP.text "〈" PP.<> PP.pretty cs PP.<> PP.text "〉")
 
 -- errors
@@ -159,14 +184,14 @@ abstractSignature ssig abstr width fs ars =
 -- inference
 --------------------------------------------------------------------------------
 
-matrix :: Schema Ix.Term -> InferM f v ([Ix.VarId], Type Ix.Term)
+matrix :: InferMonad m f v => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
 matrix (TyBase bt ix) = return ([],TyBase bt ix)
 matrix (TyQArr ixs n p) = do
   ixs' <- sequence [uniqueVar | _ <- ixs]
   let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
   return (ixs', TyArr (Ix.inst subst n) (Ix.inst subst p))
 
-returnIndex :: SizeType knd Ix.Term -> InferM f v Ix.Term
+returnIndex :: InferMonad m f v => SizeType knd Ix.Term -> m Ix.Term
 returnIndex (TyBase _ ix) = return ix
 returnIndex (TyArr _ p) = returnIndex p
 returnIndex s@TyQArr{} = matrix s >>= returnIndex . snd
@@ -216,20 +241,23 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
   annotatedRhs cc (aterm -> t1 :@ t2) = app (annotatedRhs cc t1) (annotatedRhs cc t2)
 
 
-skolemTerm :: [Ix.VarId] -> InferM f v (Ix.Term)
-skolemTerm vs = Ix.Fun <$> uniqueSym <*> return (Ix.fvar `map` vs)
+skolemTerm :: InferCG f v Ix.Term
+skolemTerm = Ix.metaVar <$> (uniqueID >>= Ix.freshMetaVar)
 
-instantiate :: [Ix.VarId] -> Schema Ix.Term -> InferM f v (Type Ix.Term)
-instantiate _ (TyBase bt ix) = return (TyBase bt ix)
-instantiate fvs (TyQArr ixs n p) = do
-  s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm fvs | ix <- ixs]
+-- skolemTerm :: [Ix.VarId] -> InferM f v (Ix.Term)
+-- skolemTerm vs = Ix.Fun <$> uniqueSym <*> return (Ix.fvar `map` vs)
+
+instantiate :: Schema Ix.Term -> InferCG f v (Type Ix.Term)
+instantiate (TyBase bt ix) = return (TyBase bt ix)
+instantiate (TyQArr ixs n p) = do
+  s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm | ix <- ixs]
   return (TyArr (Ix.inst s n) (Ix.inst s p))
 
 
-subtypeOf :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ()
+subtypeOf :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferCG f v ()
 t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2
 
-subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ()
+subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferCG f v ()
 TyBase bt1 ix1 `subtypeOf_` TyBase bt2 ix2
   | bt1 == bt2 = record (ix2 :>=: ix1)
 TyArr n p `subtypeOf_` TyArr m q = do
@@ -239,35 +267,67 @@ s@TyQArr{} `subtypeOf_` t@TyArr{} = do
   (_, t') <- matrix s
   t' `subtypeOf_` t
 t@TyArr{} `subtypeOf_` s@TyQArr{} = do
-  t' <- instantiate (fvars t) s
+  t' <- instantiate s
   t `subtypeOf_` t'
 _ `subtypeOf_` _ = error "subtypeOf_: incompatible types"
 
-infer :: (PP.Pretty f, PP.Pretty v, Ord v) => TypingContext v -> TypedTerm f v -> InferM f v (Type Ix.Term)
-infer ctx t@(aform -> (h,rest)) =
-  logBlk (PP.text "infer" PP.<+> prettyATerm (unType t) PP.<> PP.text ":") $ do
-  (ixs,hType) <- tpeOf h >>= matrix
-  argInferred <- infer ctx `mapM` rest
-  (argRequired,retType) <- assertJust (IlltypedTerm t "too many args") (uncurryUpto hType (length rest))
-  subst <- toSkolemSubst (estimateInstVars ixs argRequired argInferred)
-  logMsg (PP.text "∑" PP.<> PP.parens (prettyATerm (unType h)) PP.<+> PP.text "▹" PP.<+> PP.pretty (subst `Ix.o` hType))
-  zipWithM subtypeOf (subst `Ix.o` argRequired) argInferred
-  logMsg (PP.text "Γ ⊦" PP.<+> prettyATerm (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty (subst `Ix.o` retType))
-  return (subst `Ix.o` retType)
-    where
-      tpeOf (Var v) = assertJust (IllformedRhs t) (Map.lookup v ctx)
-      tpeOf (aterm -> TConst (_ ::: s)) = return s
+infer :: (PP.Pretty f, PP.Pretty v, Ord v) => TypingContext v -> TypedTerm f v -> InferCG f v (Type Ix.Term)
+infer ctx t@(aterm -> TVar v) = do
+  tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= instantiate
+  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty v PP.<+> PP.text ":" PP.<+> PP.pretty tp)    
+  return tp
+infer _ (aterm -> TConst (f ::: s)) = do
+  tp <- instantiate s
+  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty f PP.<+> PP.text ":" PP.<+> PP.pretty tp)
+  return tp
+infer ctx t@(aterm -> t1 :@ t2) =
+  logBlk (PP.text "infer" PP.<+> prettyATerm (unType t) PP.<> PP.text "...") $ do
+  tp1 <- infer ctx t1
+  case tp1 of
+    TyArr sArg tBdy -> do
+      tp2 <- infer ctx t2
+      tp2 `subtypeOf` sArg
+      logMsg (PP.text "Γ ⊦" PP.<+> prettyATerm (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty tBdy)
+      return tBdy
+    _ -> throwError (IlltypedTerm t1 "function type expected")
+infer _ _ = error "HoSA.Infer.infer: illformed term given"    
 
-      toSkolemSubst m =
-        Ix.substFromList <$> sequence [(ix,) <$> skolemTerm (nub fvs) | (ix,fvs) <- Map.toList m]
+
+obligationToConstraints :: (PP.Pretty v, PP.Pretty f, Ord v) => Obligation f v -> InferM f v [Constraint]
+obligationToConstraints o@(ctx :- t ::: tp) = do
+  cs <- logBlk o $ execInferCG $ do
+    tp' <- infer ctx t
+    tp' `subtypeOf` tp
+  instantiateMetaVars cs
+  return cs
+    where 
+    instantiateMetaVars cs = do
+      let (Just solved) = SetSolver.solveSystem (fromConstraint `concatMap` cs)
+          mvars = rights (concatMap (\ (l :>=: r) -> vars l ++ vars r) cs)
+      forM_ mvars $ \ mv@(Ix.MetaVar v _) -> do
+        let (Just vs) = concatMap solutionToVars <$> SetSolver.leastSolution solved v
+        f <- uniqueSym
+        Ix.substituteMetaVar mv (Ix.Fun f (Ix.fvar `map` vs))
+        
+    fromConstraint  (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
+                                    | (Right (Ix.MetaVar v _)) <- vars l, vr <- vars r]
+
+    solutionToVars SetSolver.EmptySet = []
+    solutionToVars (SetSolver.ConstructedTerm c _ []) = [c]
+    solutionToVars a = error $ "solutionToVars: unexpected answer: " ++ show a
+    
+    toExp (Left v) = SetSolver.atom v
+    toExp (Right (Ix.MetaVar v _)) = SetSolver.setVariable v
       
-      estimateInstVars ixs = walk (Map.fromList [(ix,[]) | ix <- ixs])  where
-        walk m [] [] = m
-        walk m (s:ss) (t:ts) = walk (extendFor s t m) ss ts
-        extendFor s t = Map.unionWith (++) m' 
-          where 
-            m' = Map.fromList [ (ix,fvs) | ix <- fvars s, ix `elem` ixs]
-            fvs = fvars t
+    vars Ix.Zero = []
+    vars (Ix.Succ ix) = vars ix
+    vars (Ix.Sum ixs) = concatMap vars ixs
+    vars (Ix.Fun _ ixs) = concatMap vars ixs
+    vars (Ix.Var (Ix.BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
+    vars (Ix.Var (Ix.FVar v)) = [Left v]
+    vars (Ix.MVar mv) = [Right mv]
+
+      
 
 generateConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => CSAbstract f -> Int -> Maybe [f] -> ST.STAtrs f v ->
                        IO (Either (TypingError f v) (Signature f Ix.Term, [AnnotatedRule f v], [Constraint]))
@@ -279,21 +339,15 @@ generateConstraints abstr width startSymbols sttrs = do
         cs = nub $ RS.funs rs \\ ds
         fs = fromMaybe ds startSymbols ++ cs
     sig <- abstractSignature (ST.signature sttrs) abstr width fs ars
-    
-    logBlk "Orientation constraints" $ do 
-      os <- obligations abstr sig ars
-      forM os $ \ o@(ctx :- t ::: tp) -> do
-        logBlk o $ do
-          tp' <- infer ctx t
-          tp' `subtypeOf` tp
+    let css = [ s | (CallCtx c _ _,s) <- signatureToList sig, c `elem` cs ]
 
-    logBlk "Constructor constraints" $ do
-      let css = [ s | (CallCtx c _ _,s) <- signatureToList sig, c `elem` cs ]
-      forM css $ \ s -> do
+    ocs <- logBlk "Orientation constraints" $ 
+      obligations abstr sig ars >>= concatMapM obligationToConstraints
+    ccs <- logBlk "Constructor constraints" $ execInferCG $ 
+      forM_ css $ \ s -> do
         ix <- returnIndex s
-        let fvars = [Ix.fvar v | v <- Ix.fvars ix]
-        record (ix :>=: Ix.ixSum (Ix.ixSucc Ix.ixZero : fvars))
-      return sig
+        record (ix :>=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
+    return (sig,ocs ++ ccs)
   case res of
     Left e -> return (Left e)
     Right (s,cs) -> return (Right (s,ars,cs))

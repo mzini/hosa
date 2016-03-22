@@ -2,11 +2,17 @@ module HoSA.Index where
 
 import HoSA.Utils
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe (unsafePerformIO)
+
 import Data.Maybe (fromMaybe)
 
 type VarId = Int
 
-data Var = BVar VarId | FVar VarId deriving (Eq, Ord, Show)
+data Var = BVar VarId | FVar VarId deriving (Eq, Ord)
+
+data MetaVar = MetaVar Unique (IORef (Maybe Term))
 
 data Sym = Sym { ixsName :: Maybe String, ixsId :: Unique } deriving (Eq, Ord)
 
@@ -16,7 +22,7 @@ data Term =
   | Sum [Term]
   | Fun Sym [Term]
   | Var Var
-  deriving (Eq, Ord)
+  | MVar MetaVar
 
 data Constraint = Term :>=: Term
 
@@ -46,13 +52,27 @@ fvars (Sum ixs) = concatMap fvars ixs
 fvars (Fun _ ixs) = concatMap fvars ixs
 fvars (Var (BVar _)) = []
 fvars (Var (FVar v)) = [v]
+fvars (MVar mv) = either err fvars (unsafePeakVar mv) where
+  err _ = error "HoSA.Index.fvars: free variables on terms with meta-variables cannot be determined"
+  
+freshMetaVar :: MonadIO m => Unique -> m MetaVar
+freshMetaVar u = MetaVar u <$> liftIO (newIORef Nothing)
 
-syms :: Term -> [(Sym,Int)]
-syms Zero = []
-syms (Succ ix) = syms ix
-syms (Sum ixs) = concatMap syms ixs
-syms (Fun f ixs) = (f,length ixs) : concatMap syms ixs
-syms (Var _) = []
+substituteMetaVar :: MonadIO m => MetaVar -> Term -> m Bool
+substituteMetaVar (MetaVar _ ref) t = do
+  c <- liftIO (readIORef ref)
+  case c of
+    Nothing -> liftIO (writeIORef ref (Just t)) >> return True
+    _ -> return False
+
+metaVar :: MetaVar -> Term
+metaVar = MVar
+
+unsafePeakVar :: MetaVar -> Either Unique Term
+unsafePeakVar (MetaVar u ref) =
+  case unsafePerformIO (readIORef ref) of
+    Nothing -> Left u
+    Just ix -> Right ix
 
 
 -- pretty printers
@@ -77,6 +97,10 @@ instance PP.Pretty Term where
   pretty (Sum ixs) = prettyFn "sum" ixs
   pretty (Fun sym as) = PP.pretty sym PP.<> prettyArgLst as
   pretty (Var v) = PP.pretty v
+  pretty (MVar mv) =
+    case unsafePeakVar mv of
+      Left i -> PP.text "X" PP.<> PP.int (uniqueToInt i)
+      Right t -> PP.pretty t
 
 instance PP.Pretty Constraint where
   pretty (ix1 :>=: ix2) = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text ">=" PP.</> PP.pretty ix2
@@ -118,6 +142,7 @@ instance Substitutable Term where
   subst_ s (Sum ixs) = Sum (map (subst_ s) ixs)
   subst_ s (Fun f ixs) = Fun f (map (subst_ s) ixs)
   subst_ s (Var v) = s v
+  subst_ s t@MVar{} = t
 
 instance Substitutable t => Substitutable [t] where
   type Image [t] = Image t

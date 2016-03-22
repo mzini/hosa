@@ -104,7 +104,7 @@ logBlock e m = scoped $ logMessage e >> modify succ >> m
 
 -- uniques
 
-newtype Unique = Unique Int deriving (Eq, Ord)
+newtype Unique = Unique Int deriving (Eq, Ord, Show)
 
 newtype UniqueT m a = UniqueT { runUniqueT_ :: SupplyT Unique m a }
                       deriving (Applicative, Functor, Monad, MonadIO)
