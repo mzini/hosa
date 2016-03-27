@@ -12,6 +12,7 @@ import Control.Monad.IO.Class (MonadIO)
 type Interpretation = GUBS.Interpretation Sym
 type Polynomial = GUBS.Polynomial Var
 type CS = GUBS.ConstraintSystem Sym VarId
+type Processor m = GUBS.Processor Sym Integer VarId m
 
 toCS :: [Constraint] -> CS
 toCS cs = [ gterm l GUBS.:>=: gterm r | l :>=: r <- cs ] where --todo simplification?
@@ -42,17 +43,10 @@ interpretType inter (TyQArr ixs n t) = TyQArr ixs (interpretType inter n) (inter
 interpretSig :: (Eq c, Num c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
 interpretSig inter = mapSignature (interpretType inter)
 
-data Solver = MiniSmt | Z3 deriving (Show, Data, Typeable)
-
-solveConstraints :: MonadIO m => Solver -> Signature f Term -> [Constraint] -> m (Maybe (Signature f (Polynomial Integer)))
-solveConstraints solver sig cs = do 
-  mi <- case solver of { Z3 -> GUBS.z3 solveM; MiniSmt -> GUBS.miniSMT solveM }
-  return (interpretSig <$> mi <*> return sig)
-  where
-    solveM :: GUBS.Solver s m => GUBS.SolverM s m (Maybe (GUBS.Interpretation Sym Integer))
-    solveM = GUBS.solveWith GUBS.Simple GUBS.empty (toCS cs)
--- pretty printing
-
+solveConstraints :: MonadIO m => Processor m -> Signature f Term -> [Constraint] -> m (Maybe (Signature f (Polynomial Integer)))
+solveConstraints p sig cs = fromAnswer <$> toCS cs `GUBS.solveWith` p where
+  fromAnswer (GUBS.Sat i) = Just (interpretSig i sig)
+  fromAnswer _ = Nothing
 
 ppPower :: PP.Pretty a => (a, Int) -> PP.Doc
 ppPower (v,i) = PP.pretty v PP.<> if i == 1 then PP.empty else PP.char '^' PP.<> PP.int i

@@ -1,0 +1,2 @@
+map f Nil = Nil;
+map f (Cons x xs) = Cons (f x) (map f xs);

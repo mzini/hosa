@@ -3,6 +3,7 @@ module HoSA.Utils (
   -- * Uniques
   Unique
   , uniqueToInt
+  , MonadUnique (..)
   , UniqueM    
   , UniqueT
   , unique
@@ -19,19 +20,14 @@ module HoSA.Utils (
   , ($$)
   , ppSeq
   , putDocLn
-  -- * Logging
-  , LogT
-  , LogM
-  , logBlock
-  , logMessage
-  , runLogT
-  , runLog
+  , renderPretty
 ) where
 
 import System.IO (hPutStrLn, Handle, stderr)
-import           Control.Monad.Supply
 import           Control.Monad.State
 import           Control.Monad.Writer
+import           Control.Monad.Except
+import           Control.Monad.Trace
 import Control.Monad.Identity (Identity, runIdentity)
 import Control.Monad.Except (throwError, MonadError)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
@@ -72,60 +68,49 @@ hPutDocLn h = hPutStrLn h . renderPretty
 renderPretty :: PP.Pretty e => e -> String
 renderPretty d = PP.displayS (PP.renderSmart 1.0 80 (PP.pretty d)) ""
 
--- logging
-
-newtype LogT m a = LogT { runLogM_ :: StateT Int m a }
-                   deriving (Applicative, Functor, Monad, MonadState Int)
-
-deriving instance (MonadWriter w m) => (MonadWriter w (LogT m))
-deriving instance (MonadError e m) => (MonadError e (LogT m))
-deriving instance (MonadIO m) => (MonadIO (LogT m))
-
-type LogM = LogT Identity
-
-instance MonadTrans LogT where
-  lift = LogT . lift
-
-runLogT :: Monad m => LogT m a -> m a
-runLogT = flip evalStateT 0 . runLogM_
-
-runLog :: LogM a -> a
-runLog = runIdentity . runLogT
-
-
-logMessage :: (MonadIO m, PP.Pretty e) => e -> LogT m ()
-logMessage e = do
-  i <- get
-  liftIO (hPutDocLn stderr (PP.indent (i*2) (PP.pretty e)))
-
-logBlock :: (MonadIO m, PP.Pretty e) => e -> LogT m a -> LogT m a
-logBlock e m = scoped $ logMessage e >> modify succ >> m
-
-
+----------------------------------------------------------------------
 -- uniques
+----------------------------------------------------------------------
 
 newtype Unique = Unique Int deriving (Eq, Ord, Show)
-
-newtype UniqueT m a = UniqueT { runUniqueT_ :: SupplyT Unique m a }
-                      deriving (Applicative, Functor, Monad, MonadIO)
-
-instance MonadTrans UniqueT where
-  lift = UniqueT . lift
-
-type UniqueM = UniqueT Identity
 
 uniqueToInt :: Unique -> Int
 uniqueToInt (Unique i) = i
 
-unique :: Monad m => UniqueT m Unique
-unique = UniqueT demand
+newtype UniqueT m a = UniqueT { runUniqueT_ :: StateT Unique m a }
+                      deriving (Applicative, Functor, Monad, MonadIO)
+                               
+type UniqueM = UniqueT Identity                               
 
-uniques :: Monad m => Int -> UniqueT m [Unique]
-uniques n = replicateM n unique
+demand :: Monad m => UniqueT m Unique
+demand = getU <* modifyU (\ (Unique i) -> Unique (i+1)) where
+  getU = UniqueT get
+  modifyU = UniqueT . modify
+  
 
 runUniqueT :: Monad m => UniqueT m a -> m a
-runUniqueT m = runSupplyT (runUniqueT_ m) inc (Unique 0) where
-  inc (Unique i) = Unique (i + 1)
+runUniqueT = flip evalStateT (Unique 1) . runUniqueT_
 
 runUnique :: UniqueM a -> a
 runUnique = runIdentity . runUniqueT
+
+instance MonadTrans UniqueT where lift = UniqueT . lift
+deriving instance MonadError e m => MonadError e (UniqueT m)
+
+-- MonadUnique
+
+
+class Monad m => MonadUnique m where
+  unique :: m Unique
+
+instance Monad m => MonadUnique (UniqueT m) where
+  unique = demand
+
+uniques :: MonadUnique m => Int -> m [Unique]
+uniques n = replicateM n unique
+
+instance MonadUnique m => MonadUnique (ExceptT e m) where unique = lift unique
+instance MonadUnique m => MonadUnique (TraceT t m) where unique = lift unique
+instance (Monoid w, MonadUnique m) => MonadUnique (WriterT w m) where unique = lift unique
+
+  

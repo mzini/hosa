@@ -15,20 +15,23 @@ library
                        HoSA.CallSite                  
                        HoSA.SizeType
                        HoSA.Infer
-                       HoSA.Solve                  
+                       HoSA.Solve
+                       HoSA.Parse                                    
   other-extensions:    
   build-depends:       ansi-wl-pprint >= 0.6 && < 0.7,
                        base >= 4.8 && <4.9,
                        cmdargs >= 0.10.13,
                        containers >=0.5 && <0.6,
+                       monad-trace >=0.1 && <0.2,
                        gubs >=0.2 && < 0.3,
                        mtl >=2.2 && <2.3,
                        smtlib2 >=0.3 && < 0.4,
                        term-rewriting >= 0.2 && < 0.3,
                        term-rewriting-applicative >= 0.2 && < 0.3,
                        transformers >=0.4 && <0.5,
-                       transformers-supply >=0.1 && <0.2,
-                       ifscs >=0.2 && <0.3
+                       ifscs >=0.2 && <0.3,
+                       parsec >= 3.1 && < 3.2                       
+                       
                        
   hs-source-dirs:      src
   default-language:    Haskell2010
@@ -62,9 +65,11 @@ executable hosa
                 cmdargs >= 0.10 && < 0.11,
                 ansi-wl-pprint >= 0.6 && < 0.7,
                 term-rewriting >= 0.2 && < 0.3,
-                term-rewriting-applicative >= 0.2 && < 0.3
+                term-rewriting-applicative >= 0.2 && < 0.3,
+                gubs >=0.2 && < 0.3
  default-extensions: TypeOperators,
                      DeriveDataTypeable,
                      FlexibleContexts,
                      TypeSynonymInstances,
-                     FlexibleInstances                       
+                     FlexibleInstances,
+                     StandaloneDeriving

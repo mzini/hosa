@@ -57,7 +57,7 @@ newtype Signature f ix = Signature { signatureToMap :: Map.Map f [(CallCtx f,Sch
 
 signatureFromList :: Ord f => [(CallCtx f,Schema ix)] -> Signature f ix
 signatureFromList = Signature . foldl insert Map.empty where
-  insert m d@((CallCtx f _ _),_) = Map.insertWith (++) f [d] m
+  insert m d@(CallCtx f _ _,_) = Map.insertWith (++) f [d] m
 
 signatureToList :: Signature f ix -> [(CallCtx f,Schema ix)]
 signatureToList = concat . Map.elems . signatureToMap
@@ -65,7 +65,7 @@ signatureToList = concat . Map.elems . signatureToMap
 lookupSchemas :: Ord f => f -> Signature f ix -> [(CallCtx f, Schema ix)]
 lookupSchemas f = fromMaybe [] . Map.lookup f . signatureToMap
 
-lookupSchema :: Ord f => (CallCtx f) -> Signature f ix -> Maybe (Schema ix)
+lookupSchema :: Ord f => CallCtx f -> Signature f ix -> Maybe (Schema ix)
 lookupSchema cc@(CallCtx f _ _) sig = do
   ss <- Map.lookup f (signatureToMap sig)
   lookup cc ss

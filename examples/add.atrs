@@ -1,6 +1,2 @@
-(VAR x y)
-
-(RULES
-  @(@(add,x),0) -> x
-  @(@(add,x),@(s,y)) -> @(s,@(@(add,x),y))
-)
+add x 0 = 0;
+add x (S y) = S (add x y);

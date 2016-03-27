@@ -2,7 +2,7 @@ module HoSA.CallSite where
 
 import qualified Data.Rewriting.Applicative.SimpleTypes as ST
 import           Data.Rewriting.Applicative.Term
-import           Control.Monad.Supply
+import HoSA.Utils
 import qualified Data.Rewriting.Applicative.Rule as R
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
@@ -19,7 +19,7 @@ calls :: AnnotatedRule f v -> [CallSite f]
 calls = funs . arhs
 
 withCallSites :: ST.STAtrs f v -> [AnnotatedRule f v]
-withCallSites satrs = runSupply (annotateRule `mapM` ST.rules satrs) succ 1 where
+withCallSites satrs = runUnique (annotateRule `mapM` ST.rules satrs) where
   annotateRule strl = do
     let rl = ST.untypedRule strl
     r <- annotate (R.rhs rl)
@@ -30,8 +30,8 @@ withCallSites satrs = runSupply (annotateRule `mapM` ST.rules satrs) succ 1 wher
               , ruleType = ST.ruleType strl}
   annotate (aterm -> TVar v) = return (var v)
   annotate (aterm -> t1 :@ t2) = app <$> annotate t1 <*> annotate t2
-  annotate (aterm -> TFun f ts) = do
-    fun <$> (CallSite f <$> demand) <*> mapM annotate ts
+  annotate (aterm -> TFun f ts) = 
+    fun <$> (CallSite f <$> uniqueToInt <$> unique) <*> mapM annotate ts
 
 
 data CallCtx f = CallCtx f Int [CallSite f] deriving (Eq, Ord)

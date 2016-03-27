@@ -3,7 +3,7 @@ module HoSA.Infer where
 import           Control.Monad.Except
 import           Control.Monad.Identity
 import           Control.Monad.Reader
-import           Control.Monad.Supply
+import           Control.Monad.Trace
 import           Control.Monad.Trans (lift)
 import           Control.Monad.Writer
 import           Data.List (nub, (\\))
@@ -24,11 +24,12 @@ import HoSA.Utils
 import Data.Either (rights)
 import qualified Constraints.Set.Solver as SetSolver
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-
+import Data.Tree
 
 --------------------------------------------------------------------------------
 -- common types
 --------------------------------------------------------------------------------
+
 type TypingContext v = Map v (Schema Ix.Term)
 
 type Footprint f v = (TypingContext v, Type Ix.Term)
@@ -46,45 +47,26 @@ unType = amap drp id where drp (f ::: _) = f
 -- inference monad
 --------------------------------------------------------------------------------
 
-class (MonadIO m, MonadError (TypingError f v) m) => InferMonad m f v where
-  uniqueID :: m Unique
-  logMsg :: (PP.Pretty e) => e -> m ()
-  logBlk :: (PP.Pretty e) => e -> m a -> m a
-
-uniqueSym :: InferMonad m f v => m Ix.Sym
-uniqueSym = Ix.Sym Nothing <$> uniqueID
-
-uniqueVar :: InferMonad m f v => m Ix.VarId
-uniqueVar = uniqueToInt <$> uniqueID
+type ExecutionLog = Forest String
 
 newtype InferM f v a =
-  InferM { runInferM_ :: LogT (ExceptT (TypingError f v) (UniqueT IO)) a }
+  InferM { runInferM_ :: ExceptT (TypingError f v) (TraceT String (UniqueT IO)) a }
   deriving (Applicative, Functor, Monad
+            , MonadTrace String
             , MonadError (TypingError f v)
+            , MonadUnique
             , MonadIO)
 
-runInferM :: InferM f v a -> IO (Either (TypingError f v) a)
-runInferM = runUniqueT . runExceptT . runLogT . runInferM_
-
-instance InferMonad (InferM f v) f v where
-  uniqueID = InferM (lift (lift unique))
-  logMsg e = InferM (logMessage e)
-  logBlk e (InferM m) = InferM (logBlock e m)
-
+runInferM :: InferM f v a -> IO (Either (TypingError f v) a, ExecutionLog)
+runInferM = runUniqueT . runTraceT . runExceptT . runInferM_
   
 newtype InferCG f v a = InferCG { runInferCG_ :: WriterT [Constraint] (InferM f v) a }
   deriving (Applicative, Functor, Monad
             , MonadError (TypingError f v)
             , MonadWriter [Constraint]
+            , MonadUnique
+            , MonadTrace String
             , MonadIO)
-
-instance InferMonad (InferCG f v) f v where
-  uniqueID = InferCG (lift uniqueID)
-  logMsg e = InferCG (lift (logMsg e))
-  logBlk e (InferCG m) = InferCG $ do
-    (a,w) <- lift (logBlk e (runWriterT m))
-    tell w
-    return a
 
 execInferCG ::InferCG f v a -> InferM f v [Constraint]
 execInferCG = execWriterT . runInferCG_
@@ -94,6 +76,22 @@ liftInferM = InferCG . lift
   
 record :: Constraint -> InferCG f v ()
 record cs = tell [cs] >> logMsg (PP.text "〈" PP.<> PP.pretty cs PP.<> PP.text "〉")
+
+-- utils
+--------------------------------------------------------------------------------
+
+uniqueSym :: MonadUnique m => m Ix.Sym
+uniqueSym = Ix.Sym Nothing <$> unique
+
+uniqueVar :: MonadUnique m => m Ix.VarId
+uniqueVar = uniqueToInt <$> unique
+
+logMsg :: MonadTrace String m => PP.Pretty e => e -> m ()
+logMsg = trace . renderPretty
+
+logBlk :: MonadTrace String m => PP.Pretty e => e -> m a -> m a
+logBlk = scopeTrace . renderPretty
+
 
 -- errors
 --------------------------------------------------------------------------------
@@ -184,14 +182,14 @@ abstractSignature ssig abstr width fs ars =
 -- inference
 --------------------------------------------------------------------------------
 
-matrix :: InferMonad m f v => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
+matrix :: MonadUnique m => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
 matrix (TyBase bt ix) = return ([],TyBase bt ix)
 matrix (TyQArr ixs n p) = do
   ixs' <- sequence [uniqueVar | _ <- ixs]
   let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
   return (ixs', TyArr (Ix.inst subst n) (Ix.inst subst p))
 
-returnIndex :: InferMonad m f v => SizeType knd Ix.Term -> m Ix.Term
+returnIndex :: MonadUnique m => SizeType knd Ix.Term -> m Ix.Term
 returnIndex (TyBase _ ix) = return ix
 returnIndex (TyArr _ p) = returnIndex p
 returnIndex s@TyQArr{} = matrix s >>= returnIndex . snd
@@ -242,17 +240,13 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
 
 
 skolemTerm :: InferCG f v Ix.Term
-skolemTerm = Ix.metaVar <$> (uniqueID >>= Ix.freshMetaVar)
-
--- skolemTerm :: [Ix.VarId] -> InferM f v (Ix.Term)
--- skolemTerm vs = Ix.Fun <$> uniqueSym <*> return (Ix.fvar `map` vs)
+skolemTerm = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
 
 instantiate :: Schema Ix.Term -> InferCG f v (Type Ix.Term)
 instantiate (TyBase bt ix) = return (TyBase bt ix)
 instantiate (TyQArr ixs n p) = do
   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm | ix <- ixs]
   return (TyArr (Ix.inst s n) (Ix.inst s p))
-
 
 subtypeOf :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferCG f v ()
 t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2
@@ -347,8 +341,11 @@ generateConstraints abstr width startSymbols sttrs = do
       forM_ css $ \ s -> do
         ix <- returnIndex s
         record (ix :>=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
+    logBlk "Generated Constraints" $
+      forM (ocs ++ ccs) $ \ cs -> logMsg (PP.text "〈" PP.<> PP.pretty cs PP.<> PP.text "〉")
     return (sig,ocs ++ ccs)
-  case res of
+  liftIO (putStrLn (drawForest (snd res)))
+  case fst res of
     Left e -> return (Left e)
     Right (s,cs) -> return (Right (s,ars,cs))
 
