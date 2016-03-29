@@ -1,10 +1,7 @@
 module HoSA.Infer where
 
 import           Control.Monad.Except
-import           Control.Monad.Identity
-import           Control.Monad.Reader
 import           Control.Monad.Trace
-import           Control.Monad.Trans (lift)
 import           Control.Monad.Writer
 import           Data.List (nub, (\\))
 import           Data.Maybe (fromMaybe, mapMaybe)
@@ -75,9 +72,9 @@ liftInferM ::InferM f v a -> InferCG f v a
 liftInferM = InferCG . lift
   
 record :: Constraint -> InferCG f v ()
-record cs = tell [cs] >> logMsg (PP.text "〈" PP.<> PP.pretty cs PP.<> PP.text "〉")
+record cs = tell [cs] >> logMsg (PP.text "〈" PP.<+> PP.pretty cs PP.<+> PP.text "〉")
 
--- utils
+-- variable supply and logging
 --------------------------------------------------------------------------------
 
 uniqueSym :: MonadUnique m => m Ix.Sym
@@ -144,7 +141,7 @@ abstractSchema width = runUniqueT . annotate . declToType
         return (fvsn `Set.union` fvsp, TyArr n' p')        
       
       -- returns: free variables, schema
-      annotateSchema vs (ST.BT bt) = do
+      annotateSchema _ (ST.BT bt) = do
         [i] <- freshVarIds 1
         return (Set.singleton i,TyBase (BT bt) (Ix.bvar i))
       annotateSchema vs (n ST.:~> p) = do
@@ -219,7 +216,7 @@ footprint = walk where
 
 obligations :: (Ord f, Ord v)  => CSAbstract f -> Signature f Ix.Term -> [AnnotatedRule f v] -> InferM f v [Obligation f v]
 obligations abstr sig ars = step `concatMapM` signatureToList sig where
-  step (cc@(CallCtx f i cs),s) =
+  step (cc@(CallCtx f _ _),s) =
     sequence [ do (ctx,tp) <- footprint l
                   return (ctx :- annotatedRhs cc (arhs arl) ::: tp)
              | arl <- ars
@@ -230,10 +227,10 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
   annotatedLhss s (aterm -> TConst f) = [fun (f ::: s) []]
   annotatedLhss s (aterm -> l1 :@ l2) = app <$> annotatedLhss s l1 <*> annotatedArgs l2 where
     annotatedArgs (aterm -> TVar v) = [var v]
-    annotatedArgs (aterm -> TConst f) = [ fun (f ::: s) [] | (_,s) <- lookupSchemas f sig ]
+    annotatedArgs (aterm -> TConst f) = [ fun (f ::: s') [] | (_,s') <- lookupSchemas f sig ]
     annotatedArgs (aterm -> t1 :@ t2) = app <$> annotatedArgs t1 <*> annotatedArgs t2
 
-  annotatedRhs cc (aterm -> TVar v) = var v
+  annotatedRhs _ (aterm -> TVar v) = var v
   annotatedRhs cc (aterm -> TConst cs@(CallSite f _)) = fun (f ::: s) [] where
     Just s = lookupSchema (abstr cs cc) sig
   annotatedRhs cc (aterm -> t1 :@ t2) = app (annotatedRhs cc t1) (annotatedRhs cc t2)
@@ -275,7 +272,7 @@ infer _ (aterm -> TConst (f ::: s)) = do
   logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty f PP.<+> PP.text ":" PP.<+> PP.pretty tp)
   return tp
 infer ctx t@(aterm -> t1 :@ t2) =
-  logBlk (PP.text "infer" PP.<+> prettyATerm (unType t) PP.<> PP.text "...") $ do
+  logBlk (PP.text "infer" PP.<+> prettyATerm (unType t) PP.<+> PP.text "...") $ do
   tp1 <- infer ctx t1
   case tp1 of
     TyArr sArg tBdy -> do
@@ -288,40 +285,37 @@ infer _ _ = error "HoSA.Infer.infer: illformed term given"
 
 
 obligationToConstraints :: (PP.Pretty v, PP.Pretty f, Ord v) => Obligation f v -> InferM f v [Constraint]
-obligationToConstraints o@(ctx :- t ::: tp) = do
-  cs <- logBlk o $ execInferCG $ do
+obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars cs; return cs } where
+  check (ctx :- t ::: tp) = execInferCG $ do
     tp' <- infer ctx t
     tp' `subtypeOf` tp
-  instantiateMetaVars cs
-  return cs
-    where 
-    instantiateMetaVars cs = do
-      let (Just solved) = SetSolver.solveSystem (fromConstraint `concatMap` cs)
-          mvars = rights (concatMap (\ (l :>=: r) -> vars l ++ vars r) cs)
-      forM_ mvars $ \ mv@(Ix.MetaVar v _) -> do
-        let (Just vs) = concatMap solutionToVars <$> SetSolver.leastSolution solved v
-        f <- uniqueSym
-        Ix.substituteMetaVar mv (Ix.Fun f (Ix.fvar `map` vs))
-        
-    fromConstraint  (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
-                                    | (Right (Ix.MetaVar v _)) <- vars l, vr <- vars r]
+  instantiateMetaVars cs = do
+    let (Just solved) = SetSolver.solveSystem (fromConstraint `concatMap` cs)
+        mvars = rights (concatMap (\ (l :>=: r) -> vars l ++ vars r) cs)
+    forM_ mvars $ \ mv@(Ix.MetaVar v _) -> do
+      let (Just vs) = concatMap solutionToVars <$> SetSolver.leastSolution solved v
+      f <- uniqueSym 
+      Ix.substituteMetaVar mv (Ix.Fun f (Ix.fvar `map` vs))
 
-    solutionToVars SetSolver.EmptySet = []
-    solutionToVars (SetSolver.ConstructedTerm c _ []) = [c]
-    solutionToVars a = error $ "solutionToVars: unexpected answer: " ++ show a
-    
-    toExp (Left v) = SetSolver.atom v
-    toExp (Right (Ix.MetaVar v _)) = SetSolver.setVariable v
-      
-    vars Ix.Zero = []
-    vars (Ix.Succ ix) = vars ix
-    vars (Ix.Sum ixs) = concatMap vars ixs
-    vars (Ix.Fun _ ixs) = concatMap vars ixs
-    vars (Ix.Var (Ix.BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
-    vars (Ix.Var (Ix.FVar v)) = [Left v]
-    vars (Ix.MVar mv) = [Right mv]
+  fromConstraint  (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
+                              | (Right (Ix.MetaVar v _)) <- vars l, vr <- vars r]
 
+  solutionToVars SetSolver.EmptySet = []
+  solutionToVars (SetSolver.ConstructedTerm c _ []) = [c]
+  solutionToVars a = error $ "solutionToVars: unexpected answer: " ++ show a
+
+  toExp (Left v) = SetSolver.atom v
+  toExp (Right (Ix.MetaVar v _)) = SetSolver.setVariable v
       
+  vars Ix.Zero = []
+  vars (Ix.Succ ix) = vars ix
+  vars (Ix.Sum ixs) = concatMap vars ixs
+  vars (Ix.Fun _ ixs) = concatMap vars ixs
+  vars (Ix.Var (Ix.BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
+  vars (Ix.Var (Ix.FVar v)) = [Left v]
+  vars (Ix.MVar mv) = [Right mv]
+
+
 
 generateConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => CSAbstract f -> Int -> Maybe [f] -> ST.STAtrs f v ->
                        IO (Either (TypingError f v) (Signature f Ix.Term, [AnnotatedRule f v], [Constraint]))
@@ -341,8 +335,6 @@ generateConstraints abstr width startSymbols sttrs = do
       forM_ css $ \ s -> do
         ix <- returnIndex s
         record (ix :>=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
-    logBlk "Generated Constraints" $
-      forM (ocs ++ ccs) $ \ cs -> logMsg (PP.text "〈" PP.<> PP.pretty cs PP.<> PP.text "〉")
     return (sig,ocs ++ ccs)
   liftIO (putStrLn (drawForest (snd res)))
   case fst res of

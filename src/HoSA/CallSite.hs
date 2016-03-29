@@ -1,5 +1,5 @@
 module HoSA.CallSite where
-
+       
 import qualified Data.Rewriting.Applicative.SimpleTypes as ST
 import           Data.Rewriting.Applicative.Term
 import HoSA.Utils
@@ -33,15 +33,11 @@ withCallSites satrs = runUnique (annotateRule `mapM` ST.rules satrs) where
   annotate (aterm -> TFun f ts) = 
     fun <$> (CallSite f <$> uniqueToInt <$> unique) <*> mapM annotate ts
 
-
 data CallCtx f = CallCtx f Int [CallSite f] deriving (Eq, Ord)
 
 initialCC :: f -> CallCtx f
 initialCC f = CallCtx f 0 []
 
--- pushCS :: CSAbstract f -> CallSite f -> CallCtx f -> CallCtx f
--- pushCS abstr (CallSite f i) (CallCtx g j css) = abstr (CallCtx f i (CallSite g j : css))
-  
 type CSAbstract f = CallSite f -> CallCtx f -> CallCtx f
 
 kca :: Eq f => Int -> CSAbstract f

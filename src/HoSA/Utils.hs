@@ -29,7 +29,7 @@ import           Control.Monad.Writer
 import           Control.Monad.Except
 import           Control.Monad.Trace
 import Control.Monad.Identity (Identity, runIdentity)
-import Control.Monad.Except (throwError, MonadError)
+
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 -- monad utils

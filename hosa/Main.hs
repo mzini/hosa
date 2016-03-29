@@ -38,7 +38,7 @@ defaultConfig =
        , input = def &= typFile &= argPos 0
        , solver = GUBS.MiniSmt &= help "SMT solver (minismt, z3)"
        , mainIs = Nothing &= help "Main function to analyse"
-       , clength = 1 &= help "length of call-site contexts" }
+       , clength = 0 &= help "length of call-site contexts" }
   &= help "Infer size-types for given ATRS"
 
 abstraction :: HoSA -> C.CSAbstract Symbol
