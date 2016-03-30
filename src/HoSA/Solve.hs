@@ -1,13 +1,13 @@
 module HoSA.Solve where
 
-import HoSA.Index
-import HoSA.SizeType
-import Data.Typeable (Typeable)
-import Data.Data (Data)
+import           Control.Arrow (first)
+import           Data.Tree (Forest)
+import           HoSA.Index
+import           HoSA.SizeType
 
 import qualified GUBS as GUBS
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import Control.Monad.IO.Class (MonadIO)
+import           Control.Monad.IO.Class (MonadIO)
 
 type Interpretation = GUBS.Interpretation Sym
 type Polynomial = GUBS.Polynomial Var
@@ -43,25 +43,8 @@ interpretType inter (TyQArr ixs n t) = TyQArr ixs (interpretType inter n) (inter
 interpretSig :: (Eq c, Num c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
 interpretSig inter = mapSignature (interpretType inter)
 
-solveConstraints :: MonadIO m => Processor m -> Signature f Term -> [Constraint] -> m (Maybe (Signature f (Polynomial Integer)))
-solveConstraints p sig cs = fromAnswer <$> toCS cs `GUBS.solveWith` p where
+solveConstraints :: MonadIO m => Processor m -> Signature f Term -> [Constraint] -> m (Maybe (Signature f (Polynomial Integer)), Forest String)
+solveConstraints p sig cs = first fromAnswer <$> toCS cs `GUBS.solveWith` p where
   fromAnswer (GUBS.Sat i) = Just (interpretSig i sig)
   fromAnswer _ = Nothing
-
-ppPower :: PP.Pretty a => (a, Int) -> PP.Doc
-ppPower (v,i) = PP.pretty v PP.<> if i == 1 then PP.empty else PP.char '^' PP.<> PP.int i
-
-instance PP.Pretty v => PP.Pretty (GUBS.Monomial v) where
-  pretty mono = pretty' (GUBS.toPowers mono) where
-    pretty' [] = PP.char '1'
-    pretty' ps = PP.hcat (PP.punctuate (PP.char '*') [ppPower p | p <- ps])
-
-instance (Eq c, Num c, PP.Pretty c, PP.Pretty v) => PP.Pretty (GUBS.Polynomial v c) where
-  pretty poly = pretty' [p | p <- GUBS.toMonos poly, fst p /= 0] where 
-    pretty' [] = PP.char '0'
-    pretty' ps = PP.hcat (PP.punctuate (PP.char '+') (ppMono `map` ps))
-    ppMono (1,mono) = PP.pretty mono
-    ppMono (c,GUBS.toPowers -> []) = PP.pretty c
-    ppMono (c,mono) = PP.pretty c PP.<> PP.char '*' PP.<> PP.pretty mono
-
 

@@ -57,7 +57,7 @@ newtype Signature f ix = Signature { signatureToMap :: Map.Map f [(CallCtx f,Sch
 
 signatureFromList :: Ord f => [(CallCtx f,Schema ix)] -> Signature f ix
 signatureFromList = Signature . foldl insert Map.empty where
-  insert m d@(CallCtx f _ _,_) = Map.insertWith (++) f [d] m
+  insert m d@(cc,_) = Map.insertWith (++) (ctxSym cc) [d] m
 
 signatureToList :: Signature f ix -> [(CallCtx f,Schema ix)]
 signatureToList = concat . Map.elems . signatureToMap
@@ -66,8 +66,8 @@ lookupSchemas :: Ord f => f -> Signature f ix -> [(CallCtx f, Schema ix)]
 lookupSchemas f = fromMaybe [] . Map.lookup f . signatureToMap
 
 lookupSchema :: Ord f => CallCtx f -> Signature f ix -> Maybe (Schema ix)
-lookupSchema cc@(CallCtx f _ _) sig = do
-  ss <- Map.lookup f (signatureToMap sig)
+lookupSchema cc sig = do
+  ss <- Map.lookup (ctxSym cc) (signatureToMap sig)
   lookup cc ss
 
 mapSignature :: (Schema ix -> Schema ix') -> Signature f ix -> Signature f ix'
@@ -77,8 +77,8 @@ mapSignature f (Signature m) = Signature (Map.map (\ es -> [(cc,f s) | (cc,s) <-
 
 instance PP.Pretty BaseType where
   pretty (BT i) = PP.text (names !! i) where
-    names = [ [c] | c <- ['A'..'Z'] ] ++ [ 'B' : show i | i <- [(1 :: Int)..] ]
-  
+    names = [ [c] | c <- ['A'..'Z'] ] ++ [ 'B' : show j | j <- [(1 :: Int)..] ]
+
 
 prettyType :: (ix -> PP.Doc) -> SizeType knd ix -> PP.Doc
 prettyType = ppTpe id
@@ -90,11 +90,13 @@ prettyType = ppTpe id
            ppTpe PP.parens pix n PP.<+> PP.text "->" PP.</> ppTpe id pix t)
     ppTpe par pix (TyQArr qvs n t) = par (PP.hang 2 $ ppQual qvs PP.</> ppTpe id pix (TyArr n t)) where
         ppQual [] = PP.empty
-        ppQual vs = PP.text "forall" PP.<+> ppSeq PP.space [ PP.pretty (Ix.BVar v) | v <- vs] PP.<> PP.text "."
+        ppQual vs = PP.text "∀" PP.<+> ppSeq PP.space [ PP.pretty (Ix.BVar v) | v <- vs] PP.<> PP.text "."
 
+instance (PP.Pretty f, PP.Pretty ix) => PP.Pretty (CallCtx f ST.::: SizeType knd ix) where
+  pretty (cc ST.::: s) = PP.pretty "∑" PP.<> PP.parens (PP.pretty cc) PP.<+> PP.text "↦" PP.<+> PP.pretty s
+                                                                                                          
 instance PP.Pretty ix => PP.Pretty (SizeType knd ix) where
   pretty = prettyType PP.pretty
 
 instance (PP.Pretty f, PP.Pretty ix) => PP.Pretty (Signature f ix) where
-  pretty sig = PP.vcat [ PP.hang 2 $ PP.pretty cc PP.<+> PP.text ":" PP.</> PP.pretty n
-                       | (cc, n) <- signatureToList sig ]
+  pretty sig = PP.vcat [ PP.hang 2 $ PP.pretty (cc ST.::: n) | (cc, n) <- signatureToList sig ]

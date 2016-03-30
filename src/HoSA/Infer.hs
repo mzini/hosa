@@ -119,12 +119,14 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypingError f v) where
 -- abstract signature
 --------------------------------------------------------------------------------
 
+
+declToType td = foldr (ST.:~>) (ST.outputType td) (ST.inputTypes td)
+
 abstractSchema :: Int -> ST.TypeDecl -> InferM f v (Schema Ix.Term)
 abstractSchema width = runUniqueT . annotate . declToType
     where
       freshVarIds n = map uniqueToInt <$> uniques n 
       freshFun vs = Ix.Fun <$> lift uniqueSym <*> return (Ix.bvar `map` Set.toList vs)
-      declToType td = foldr (ST.:~>) (ST.outputType td) (ST.inputTypes td)
       
       annotate tp = close <$> annotateToplevel Set.empty tp where
         close :: (Set.Set Ix.VarId,Type Ix.Term) -> Schema Ix.Term
@@ -165,17 +167,17 @@ abstractSchema width = runUniqueT . annotate . declToType
 
 abstractSignature :: (PP.Pretty f, Ord f) => ST.Signature f -> CSAbstract f -> Int -> [f] -> [AnnotatedRule f v]
                      -> InferM f v (Signature f Ix.Term)
-abstractSignature ssig abstr width fs ars =
-  logBlk "Abstract Signature" $ 
-  signatureFromList <$> sequence [ do s <- maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
-                                      logMsg (PP.pretty "∑" PP.<> PP.parens (PP.pretty f) PP.<+> PP.text "↦" PP.<+> PP.pretty s)
-                                      return (cc,s)
-                                 | cc@(CallCtx f _ _) <- ccs ]
+abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do 
+    ccs <- callContexts abstr ars <$> sequence [ maybe (declMissing f) return (initialCC f <$> declToType <$> Map.lookup f ssig) | f <- fs]
+    signatureFromList <$> sequence [ do s <- maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
+                                        logMsg (cc ::: s)
+                                        return (cc,s)
+                                   | cc <- ccs
+                                   , let f = ctxSym cc ]
   where
-    ccs = callContexts abstr ars [initialCC f | f <- fs]
     declMissing = throwError . DeclarationMissing
 
-  
+
 -- inference
 --------------------------------------------------------------------------------
 
@@ -216,11 +218,11 @@ footprint = walk where
 
 obligations :: (Ord f, Ord v)  => CSAbstract f -> Signature f Ix.Term -> [AnnotatedRule f v] -> InferM f v [Obligation f v]
 obligations abstr sig ars = step `concatMapM` signatureToList sig where
-  step (cc@(CallCtx f _ _),s) =
+  step (cc,s) =
     sequence [ do (ctx,tp) <- footprint l
                   return (ctx :- annotatedRhs cc (arhs arl) ::: tp)
              | arl <- ars
-             , headSymbol (lhs arl) == Just f
+             , headSymbol (lhs arl) == Just (ctxSym cc)
              , l <- annotatedLhss s (lhs arl) ]
     
   annotatedLhss _ (aterm -> TVar v) = [var v]
@@ -231,7 +233,7 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
     annotatedArgs (aterm -> t1 :@ t2) = app <$> annotatedArgs t1 <*> annotatedArgs t2
 
   annotatedRhs _ (aterm -> TVar v) = var v
-  annotatedRhs cc (aterm -> TConst cs@(CallSite f _)) = fun (f ::: s) [] where
+  annotatedRhs cc (aterm -> TConst cs@(CallSite (f ::: _) _)) = fun (f ::: s) [] where
     Just s = lookupSchema (abstr cs cc) sig
   annotatedRhs cc (aterm -> t1 :@ t2) = app (annotatedRhs cc t1) (annotatedRhs cc t2)
 
@@ -317,17 +319,17 @@ obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars 
 
 
 
-generateConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => CSAbstract f -> Int -> Maybe [f] -> ST.STAtrs f v ->
-                       IO (Either (TypingError f v) (Signature f Ix.Term, [AnnotatedRule f v], [Constraint]))
-generateConstraints abstr width startSymbols sttrs = do
-  let ars = withCallSites sttrs
-  res <- runInferM $ do
+generateConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => CSAbstract f -> Int -> Maybe [f] -> ST.STAtrs f v 
+                    -> IO (Either (TypingError f v) (Signature f Ix.Term, [Constraint])
+                          , [AnnotatedRule f v]
+                          , ExecutionLog)
+generateConstraints abstr width startSymbols sttrs = liftM withARS $ runInferM $ do
     let rs = ST.untypedRule `map` ST.rules sttrs
         ds = nub $ (headSymbol . R.lhs) `mapMaybe` rs
         cs = nub $ RS.funs rs \\ ds
         fs = fromMaybe ds startSymbols ++ cs
     sig <- abstractSignature (ST.signature sttrs) abstr width fs ars
-    let css = [ s | (CallCtx c _ _,s) <- signatureToList sig, c `elem` cs ]
+    let css = [ s | (ctx,s) <- signatureToList sig, ctxSym ctx `elem` cs ]
 
     ocs <- logBlk "Orientation constraints" $ 
       obligations abstr sig ars >>= concatMapM obligationToConstraints
@@ -336,10 +338,9 @@ generateConstraints abstr width startSymbols sttrs = do
         ix <- returnIndex s
         record (ix :>=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
     return (sig,ocs ++ ccs)
-  liftIO (putStrLn (drawForest (snd res)))
-  case fst res of
-    Left e -> return (Left e)
-    Right (s,cs) -> return (Right (s,ars,cs))
+  where 
+    withARS (s,cs) = (s,ars,cs)
+    ars = withCallSites sttrs
 
 -- pretty printers
 --------------------------------------------------------------------------------

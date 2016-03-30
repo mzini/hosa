@@ -66,7 +66,7 @@ hPutDocLn :: PP.Pretty e => Handle -> e -> IO ()
 hPutDocLn h = hPutStrLn h . renderPretty
 
 renderPretty :: PP.Pretty e => e -> String
-renderPretty d = PP.displayS (PP.renderSmart 1.0 80 (PP.pretty d)) ""
+renderPretty d = PP.displayS (PP.renderSmart 1.0 200 (PP.pretty d)) ""
 
 ----------------------------------------------------------------------
 -- uniques

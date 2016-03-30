@@ -2,6 +2,7 @@
 module Main where
 
 import Data.Maybe (fromMaybe, mapMaybe, listToMaybe)
+import Data.Tree (drawForest, Forest)
 import System.Console.CmdArgs
 import Data.Typeable (Typeable)
 import qualified Data.Rewriting.Applicative.SimpleTypes as ST
@@ -11,6 +12,8 @@ import qualified Data.Rewriting.Applicative.Rules as RS
 import qualified Data.Rewriting.Applicative.Term as T
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import Control.Monad.Except
+import Control.Monad.Reader
+import Control.Monad (when)
 import System.Exit
 
 import HoSA.Utils
@@ -20,14 +23,15 @@ import qualified HoSA.Infer as I
 import qualified HoSA.Index as Ix
 import qualified HoSA.Solve as S
 import qualified HoSA.SizeType as SzT
-import qualified GUBS as GUBS
+import GUBS
 
-deriving instance Typeable (GUBS.SMTSolver)
-deriving instance Data (GUBS.SMTSolver)
+deriving instance Typeable (SMTSolver)
+deriving instance Data (SMTSolver)
 
 data HoSA = HoSA { width :: Int
                  , clength :: Int
-                 , solver :: GUBS.SMTSolver
+                 , solver :: SMTSolver
+                 , verbose :: Bool
                  , mainIs :: Maybe [String]
                  , input :: FilePath}
           deriving (Show, Data, Typeable)
@@ -36,71 +40,84 @@ defaultConfig :: HoSA
 defaultConfig =
   HoSA { width = 1 &= help "width, i.e. number of extra variables, of size-types"
        , input = def &= typFile &= argPos 0
-       , solver = GUBS.MiniSmt &= help "SMT solver (minismt, z3)"
+       , solver = MiniSmt &= help "SMT solver (minismt, z3)"
        , mainIs = Nothing &= help "Main function to analyse"
+       , verbose = False                           
        , clength = 0 &= help "length of call-site contexts" }
   &= help "Infer size-types for given ATRS"
 
 abstraction :: HoSA -> C.CSAbstract Symbol
 abstraction cfg = C.kca (clength cfg)
 
+constraintProcessor :: MonadIO m => HoSA -> S.Processor m
+constraintProcessor cfg =
+  try (smt' 0) ==> try (smt' 1) ==> smt' 2 where
+  smt' = smt (solver cfg)
+  -- simplify = propagateUp --exhaustive (propagateUp <=> propagateDown)
+
 data Error = ParseError ParseError
            | SimpleTypeError String
            | SizeTypeError (I.TypingError Symbol Variable)
            | ConstraintUnsolvable
 
-type RunM = ExceptT Error IO    
+type RunM = ExceptT Error (ReaderT HoSA IO)    
 
 type STATRS = ST.STAtrs Symbol Variable
 
-atrsFromFile :: HoSA -> RunM [Rule]
-atrsFromFile cfg = fromFile (input cfg) >>= assertRight ParseError 
+putExecLog :: Forest String -> RunM ()
+putExecLog l = do 
+   v <- reader verbose
+   when v (liftIO (putStrLn (drawForest l))) 
+
+
+status :: PP.Pretty e => String -> e -> RunM ()
+status n e = liftIO (putDocLn (PP.text n PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
+
+readATRS :: RunM [Rule]
+readATRS = reader input >>= fromFile >>= assertRight ParseError 
 
 inferSimpleTypes :: [Rule] -> RunM STATRS
 inferSimpleTypes = assertRight SimpleTypeError . ST.fromATRS
 
-generateConstraints :: HoSA -> STATRS -> RunM (SzT.Signature Symbol Ix.Term, [C.AnnotatedRule Symbol Variable], [Ix.Constraint])
-generateConstraints cfg stars = 
-  lift (I.generateConstraints (abstraction cfg) (width cfg) (map Symbol <$> mainIs cfg) stars)
-  >>= assertRight SizeTypeError
+generateConstraints :: STATRS -> RunM (SzT.Signature Symbol Ix.Term, [C.AnnotatedRule Symbol Variable], [Ix.Constraint])
+generateConstraints stars = do 
+  abstr <- reader abstraction
+  w <- reader width
+  ms <- fmap (map Symbol) <$> reader mainIs
+  (res,ars,l) <- liftIO (I.generateConstraints abstr w ms stars)
+  putExecLog l
+  (\(s,c) -> (s,ars,c)) <$> assertRight SizeTypeError res
 
-constraintProcessor :: MonadIO m => HoSA -> S.Processor m
-constraintProcessor cfg =
-  try (smt 0) GUBS.>=> try (smt 1) GUBS.>=> smt 2 where
-  smt = GUBS.smt (solver cfg)
-  try = GUBS.try
+solveConstraints ::  SzT.Signature Symbol Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature Symbol (S.Polynomial Integer))
+solveConstraints asig cs = do 
+  p <- reader constraintProcessor  
+  (msig,l) <- S.solveConstraints p asig cs
+  putExecLog l
+  assertJust ConstraintUnsolvable msig
 
-solveConstraints :: HoSA -> SzT.Signature Symbol Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature Symbol (S.Polynomial Integer))
-solveConstraints cfg asig cs =
-  S.solveConstraints (constraintProcessor cfg) asig cs
-  >>= assertJust ConstraintUnsolvable where
-
-status :: PP.Pretty e => String -> e -> RunM ()
-status n e = lift (putDocLn (PP.text n PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
-
-run :: IO (Either Error ())
-run = runExceptT $ do
-  cfg <- lift (cmdArgs defaultConfig)
-  atrs <- atrsFromFile cfg >>= inferSimpleTypes
-  (asig,ars,cs) <- generateConstraints cfg atrs
-  status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
-                            PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.signature atrs)))
-  sig <- solveConstraints cfg asig cs
-  status "Signature" sig
-  return ()
+runHosa :: IO (Either Error ())
+runHosa = do
+  cfg <- cmdArgs defaultConfig
+  flip runReaderT cfg $ runExceptT $ do
+    atrs <- readATRS >>= inferSimpleTypes
+    (asig,ars,cs) <- generateConstraints atrs
+    status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
+                           PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.signature atrs)))
+    sig <- solveConstraints asig cs
+    status "Signature" sig
+    return ()
 
 main :: IO ()
-main = run >>= exit where
+main = runHosa >>= exit where
   exit (Left e@SizeTypeError{}) = putDocLn e >> exitSuccess
   exit (Left e) = putDocLn e >> exitWith (ExitFailure (-1))
   exit _ = exitSuccess
 
 
 -- pretty printers
+   
 instance PP.Pretty Symbol where pretty (Symbol n) = PP.bold (PP.text n)
 instance PP.Pretty Variable where pretty (Variable n) = PP.text n
-
-
 
 instance PP.Pretty Error where
   pretty (ParseError e) =
