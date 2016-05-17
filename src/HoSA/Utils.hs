@@ -6,7 +6,6 @@ module HoSA.Utils (
   , MonadUnique (..)
   , UniqueM    
   , UniqueT
-  , unique
   , uniques
   , runUnique
   , runUniqueT
@@ -111,6 +110,7 @@ uniques n = replicateM n unique
 
 instance MonadUnique m => MonadUnique (ExceptT e m) where unique = lift unique
 instance MonadUnique m => MonadUnique (TraceT t m) where unique = lift unique
+instance MonadUnique m => MonadUnique (StateT t m) where unique = lift unique
 instance (Monoid w, MonadUnique m) => MonadUnique (WriterT w m) where unique = lift unique
 
   

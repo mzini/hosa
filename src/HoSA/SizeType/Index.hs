@@ -1,4 +1,31 @@
-module HoSA.Index where
+module HoSA.SizeType.Index (
+  -- * Index Terms
+  Term (..)
+  , Var (..)
+  , VarId
+  , Sym (..)
+  , MetaVar (..)
+  , fvar
+  , bvar
+  , ixZero
+  , ixSucc
+  , ixSum
+  , fvars
+  , metaVar
+  , freshMetaVar
+  , substituteMetaVar
+  , unsafePeakVar
+  -- * Constraints
+  , Constraint (..)
+  -- * Substitutions on Index Terms
+  , Substitutable (..)
+  , Subst
+  , idSubst
+  , after
+  , o
+  , inst
+  , substFromList
+  ) where
 
 import HoSA.Utils
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
@@ -45,16 +72,9 @@ ixSum [] = ixZero
 ixSum [t] = t
 ixSum ts = Sum ts
 
-fvars :: Term -> [VarId]
-fvars Zero = []
-fvars (Succ ix) = fvars ix
-fvars (Sum ixs) = concatMap fvars ixs
-fvars (Fun _ ixs) = concatMap fvars ixs
-fvars (Var (BVar _)) = []
-fvars (Var (FVar v)) = [v]
-fvars (MVar mv) = either err fvars (unsafePeakVar mv) where
-  err _ = error "HoSA.Index.fvars: free variables on terms with meta-variables cannot be determined"
-  
+metaVar :: MetaVar -> Term
+metaVar = MVar
+
 freshMetaVar :: MonadIO m => Unique -> m MetaVar
 freshMetaVar u = MetaVar u <$> liftIO (newIORef Nothing)
 
@@ -65,14 +85,22 @@ substituteMetaVar (MetaVar _ ref) t = do
     Nothing -> liftIO (writeIORef ref (Just t)) >> return True
     _ -> return False
 
-metaVar :: MetaVar -> Term
-metaVar = MVar
-
 unsafePeakVar :: MetaVar -> Either Unique Term
 unsafePeakVar (MetaVar u ref) =
   case unsafePerformIO (readIORef ref) of
     Nothing -> Left u
     Just ix -> Right ix
+
+fvars :: Term -> [VarId]
+fvars Zero = []
+fvars (Succ ix) = fvars ix
+fvars (Sum ixs) = concatMap fvars ixs
+fvars (Fun _ ixs) = concatMap fvars ixs
+fvars (Var (BVar _)) = []
+fvars (Var (FVar v)) = [v]
+fvars (MVar mv) = either err fvars (unsafePeakVar mv) where
+  err _ = error "HoSA.Index.fvars: free variables on terms with meta-variables cannot be determined"
+
 
 
 -- pretty printers
@@ -97,10 +125,9 @@ instance PP.Pretty Term where
   pretty (Sum ixs) = prettyFn "sum" ixs
   pretty (Fun sym as) = PP.pretty sym PP.<> prettyArgLst as
   pretty (Var v) = PP.pretty v
-  pretty (MVar mv) =
-    case unsafePeakVar mv of
-      Left i -> PP.text "X" PP.<> PP.int (uniqueToInt i)
-      Right t -> PP.pretty t
+  pretty (MVar mv@(MetaVar v _)) = PP.text "X" PP.<> PP.int (uniqueToInt v) PP.<> ppContent (unsafePeakVar mv) where
+    ppContent (Left _) = PP.empty 
+    ppContent (Right t) = PP.text "@" PP.<> PP.braces (PP.pretty t)
 
 instance PP.Pretty Constraint where
   pretty (ix1 :>=: ix2) = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text ">=" PP.</> PP.pretty ix2

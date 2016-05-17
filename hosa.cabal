@@ -10,13 +10,14 @@ cabal-version:         >=1.10
                        
 library
   exposed-modules:
-                       HoSA.Index
                        HoSA.Utils
-                       HoSA.CallSite                  
-                       HoSA.SizeType
-                       HoSA.Infer
-                       HoSA.Solve
-                       HoSA.Parse                                    
+                       HoSA.Data.Rewriting
+                       HoSA.Data.SimpleType
+                       HoSA.Data.CallSite
+                       HoSA.SizeType.Type                  
+                       HoSA.SizeType.Index
+                       HoSA.SizeType.Infer
+                       HoSA.SizeType.Solve
   other-extensions:    
   build-depends:       ansi-wl-pprint >= 0.6 && < 0.7,
                        base >= 4.8 && <4.9,
