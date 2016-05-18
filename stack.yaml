@@ -1,0 +1,24 @@
+flags: {}
+packages:
+- '.'
+- location:
+    git: git@github.com:mzini/monad-trace
+    commit: b75ce1b391cbdd14917feeee95166d55bef5c823
+- location:
+    git: git@github.com:mzini/gubs
+    commit: 9aee6ddfa4b8ba39246178d1c901b6d7f89dc89e
+- location:
+    git: git@github.com:ComputationWithBoundedResources/term-rewriting-applicative
+    commit: f4ac8409a21b47b2f08af4c18f45103925082a80
+- location:
+    git: git@github.com:haskell-rewriting/term-rewriting
+    commit: 9bd9151d3a6d7221f707fabe3629312aee38bb27
+extra-deps:
+- ifscs-0.2.0.0
+- smtlib2-0.3
+- union-find-array-0.1.0.2
+- multiset-0.2.2
+- atto-lisp-0.2.2.2
+- data-fix-0.0.3
+- failure-0.2.0.3
+resolver: lts-5.10
