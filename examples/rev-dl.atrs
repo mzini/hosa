@@ -1,0 +1,5 @@
+id z = z;
+comp f g z = f (g z);
+walk Nil = id;
+walk (Cons x xs) = comp (walk xs) (Cons x);
+rev xs = walk xs Nil;

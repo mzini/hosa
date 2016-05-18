@@ -1,0 +1,23 @@
+(* haskell way of lifting functions to state monad.
+Considered system:
+
+double f x = f (f x);
+add x 0 = x;
+add x (S y) = S (add x y);
+main x = double (add x);
+*)
+
+addT t1 Z = t1;
+addT t1 (T t2) = T (addT t1 t2);
+
+return a = (a, Z);
+bind (a, t) fm = bindHlp t (fm a);
+bindHlp t1 (b, t2) = (b, addT t1 t2);
+tick (a, t) = (a, T t);
+
+succm (x, t) = (S x, t);
+addm x 0 = tick (return x);
+addm x (S y) = tick (succm (addm x y));
+
+doublem fm x = tick (bind (fm x) fm);
+main x y = tick (doublem (addm x) y);

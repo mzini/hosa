@@ -1,0 +1,4 @@
+add x 0 = x;
+add x (S y) = S (add x y);
+mult x 0 = 0;
+mult x (S y) = add (mult x y) x;
