@@ -103,8 +103,8 @@ runHosa = do
   cfg <- cmdArgs defaultConfig
   flip runReaderT cfg $ runExceptT $ do
     atrs <- readATRS >>= inferSimpleTypes
-    status "ATRS" (PP.pretty (ST.strRule `map` ST.rules atrs))
-    status "Simple Type Signature" (PP.pretty (ST.signature atrs))
+    -- status "ATRS" (PP.pretty (ST.strRule `map` ST.rules atrs))
+    -- status "Simple Type Signature" (PP.pretty (ST.signature atrs))
     (asig,ars,cs) <- generateConstraints atrs
     status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
                            PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.signature atrs)))

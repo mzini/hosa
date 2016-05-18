@@ -99,7 +99,7 @@ instance {-# OVERLAPPING  #-} PP.Pretty AnnotatedTerm where
 
   
 instance PP.Pretty AnnotatedRule where
-  pretty rl = PP.pretty (ruleEnv rl)
+  pretty rl = PP.group (PP.pretty (ruleEnv rl))
     PP.<+> PP.text "⊢"
     PP.</> PP.hang 2 (prettyRl (lhs rl) (arhs rl) PP.<+> PP.text ":" PP.<+> PP.pretty (ruleType rl))
     where prettyRl l r = PP.pretty l PP.<+> PP.text "=" PP.</> PP.pretty r
