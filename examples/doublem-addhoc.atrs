@@ -1,5 +1,5 @@
 (*
-Lift of the following system to stateful computation:
+Lift of double.atrs to ticking monad; ad-hoc way.
 
 double f x = f (f x);
 add x 0 = x;

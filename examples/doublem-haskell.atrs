@@ -1,5 +1,5 @@
-(* haskell way of lifting functions to state monad.
-Considered system:
+(*
+Lift of double.atrs to ticking monad; Haskell way.
 
 double f x = f (f x);
 add x 0 = x;
