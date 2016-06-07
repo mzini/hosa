@@ -12,6 +12,8 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 data CallSite = CallSite (R.FunId ::: SimpleType) Int
 
+data CallCtx = CallCtx CallSite [CallSite] deriving (Eq)
+
 instance Eq CallSite where
     CallSite (f ::: _) i == CallSite (g ::: _) j = f == g && i == j
 
@@ -32,20 +34,13 @@ withCallSites satrs = runUnique (annotateRule `mapM` rules satrs) where
     let rl = strRule strl
         trl = strTypedRule strl
     r <- annotate (R.rhs trl)
-    return AR { lhs = R.lhs rl
-              , rhs = R.rhs rl
-              , arhs = r
-              , ruleEnv = strEnv strl
-              , ruleType = strType strl}
+    return AR { lhs = R.lhs rl, rhs = R.rhs rl, arhs = r, ruleEnv = strEnv strl, ruleType = strType strl}
   annotate (R.tview -> R.TVar (v ::: _)) = return (T.var v)
   annotate (R.tview -> R.TAppl t1 t2) = T.app <$> annotate t1 <*> annotate t2
   annotate (R.tview -> R.TPair t1 t2) = tup <$> annotate t1 <*> annotate t2 where
     tup a b = T.fun Nothing [a,b]
   annotate (R.tview -> R.TConst (f ::: tp)) = 
     T.fun <$> (Just <$> CallSite (f ::: tp) <$> uniqueToInt <$> unique) <*> return []
-
-
-data CallCtx = CallCtx CallSite [CallSite] deriving (Eq)
 
 initialCC :: R.FunId -> SimpleType -> CallCtx
 initialCC f tp = CallCtx (CallSite (f ::: tp) 0) []

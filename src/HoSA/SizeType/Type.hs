@@ -14,7 +14,7 @@ data Kind = T | S
 
 data SizeType (knd :: Kind) ix where 
   SzBase :: BaseType -> ix -> SizeType knd ix
-  SzPair :: SizeType knd ix -> SizeType knd ix -> SizeType knd ix
+  SzPair :: Type ix -> Type ix -> Type ix
   SzArr  :: Schema ix -> Type ix -> Type ix
   SzQArr :: [Ix.VarId] -> Schema ix -> Type ix -> Schema ix
 

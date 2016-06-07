@@ -98,20 +98,19 @@ data SzTypingError where
   DeclarationMissing :: FunId -> SzTypingError
 
 instance PP.Pretty SzTypingError where
-  pretty err = pp err
-    where
-      pp (IllformedLhs t) =
-        PP.hang 2 (PP.text "Illformed left-hand side encountered:"
-                   PP.</> PP.pretty (unType t))
-      pp (IllformedRhs t) =
-        PP.hang 2 (PP.text "Illformed right-hand side encountered:"
-                   PP.</> PP.pretty (unType t))
-      pp (IlltypedTerm t s tp) =
-        PP.hang 2 (PP.text "Term" PP.<+> PP.squotes (PP.pretty (unType t)) PP.<> PP.text ""
-                   PP.</> PP.text "has type" PP.<+> PP.squotes (PP.pretty tp) PP.<> PP.text ","
-                   PP.</> PP.text "but expecting" PP.<+> PP.squotes (PP.text s) PP.<> PP.text ".")
-      pp (DeclarationMissing f) =
-        PP.text "Type-declaration of symbol" PP.<+> PP.squotes (PP.pretty f) PP.<+> PP.text "missing."
+  pretty (IllformedLhs t) =
+    PP.hang 2 (PP.text "Illformed left-hand side encountered:"
+               PP.</> PP.pretty (unType t))
+  pretty (IllformedRhs t) =
+    PP.hang 2 (PP.text "Illformed right-hand side encountered:"
+               PP.</> PP.pretty (unType t))
+  pretty (IlltypedTerm t s tp) =
+    PP.hang 2
+      (PP.text "Term" PP.<+> PP.squotes (PP.pretty (unType t)) PP.<> PP.text ""
+       PP.</> PP.text "has type" PP.<+> PP.squotes (PP.pretty tp) PP.<> PP.text ","
+       PP.</> PP.text "but expecting" PP.<+> PP.squotes (PP.text s) PP.<> PP.text ".")
+  pretty (DeclarationMissing f) =
+    PP.text "Type-declaration of symbol" PP.<+> PP.squotes (PP.pretty f) PP.<+> PP.text "missing."
 
 -- abstract signature
 --------------------------------------------------------------------------------
@@ -119,61 +118,66 @@ instance PP.Pretty SzTypingError where
 
 abstractSchema :: Int -> SimpleType -> InferM (Schema Ix.Term)
 abstractSchema width = runUniqueT . annotate
-    where
-      freshVarIds n = map uniqueToInt <$> uniques n 
-      freshFun vs = Ix.Fun <$> lift uniqueSym <*> return (Ix.bvar `map` Set.toList vs)
-      
-      annotate tp = close <$> annotateToplevel Set.empty tp where
-        close :: (Set.Set Ix.VarId,Type Ix.Term) -> Schema Ix.Term
+  where
+    freshVarIds n = map uniqueToInt <$> uniques n
+    freshFun vs = Ix.Fun <$> lift uniqueSym <*> return (Ix.bvar `map` Set.toList vs)
+
+    annotate tp = close <$> annotateToplevel Set.empty tp
+      where
+        close :: (Set.Set Ix.VarId, Type Ix.Term) -> Schema Ix.Term
         close (_, SzBase bt ix) = SzBase bt ix
-        close (fvs,SzArr n p) = SzQArr (Set.toList fvs) n p
+        close (fvs, SzArr n p) = SzQArr (Set.toList fvs) n p
 
-      -- returns: free variables, type
-      annotateToplevel vs (TyBase bt) = do
-        t <- SzBase bt <$> freshFun vs
-        return (Set.empty,t)
-      annotateToplevel vs (TyPair tp1 tp2) = do
-        (fvs1, t1) <- annotateToplevel vs tp1
-        (fvs2, t2) <- annotateToplevel vs tp2
-        return (fvs1 `Set.union` fvs2,SzPair t1 t2)        
-      annotateToplevel vs (n :-> p) = do
-        (fvsn, n') <- annotateSchema vs n
-        (fvsp, p') <- annotateToplevel (fvsn `Set.union` vs) p
-        return (fvsn `Set.union` fvsp, SzArr n' p')        
-      
-      -- returns: free variables, schema
-      annotateSchema _ (TyBase bt) = do
-        [i] <- freshVarIds 1
-        return (Set.singleton i,SzBase bt (Ix.bvar i))
-      annotateSchema vs (TyPair tp1 tp2) = do
-        (fvs1,t1) <- annotateSchema vs tp1
-        (fvs2,t2) <- annotateSchema vs tp2
-        return (fvs1 `Set.union` fvs2, SzPair t1 t2)
-      annotateSchema vs (n :-> p) = do
-        (nvs, pvs, SzArr n' p') <- annotateArr vs n p
-        return (pvs Set.\\ nvs, SzQArr (Set.toList nvs) n' p')
-        
-      -- returns: negative free variables, positive free variables, type
-      annotateType vs (TyBase bt) = do
-        is <- freshVarIds width
-        let vs' = Set.fromList is `Set.union` vs
-        ix <- freshFun vs'
-        return (Set.empty, vs', SzBase bt ix)
-      annotateType vs (TyPair tp1 tp2) = do
-        (fvsn1,fvsp1,t1) <- annotateType vs tp1
-        (fvsn2,fvsp2,t2) <- annotateType vs tp2
-        return (fvsn1 `Set.union` fvsn2, fvsp1 `Set.union` fvsp2, SzPair t1 t2)        
-      annotateType vs (n :-> p) = annotateArr vs n p
+    -- returns: free variables, type
+    annotateToplevel vs (TyBase bt) = do
+      t <- SzBase bt <$> freshFun vs
+      return (Set.empty, t)
+    annotateToplevel vs (TyPair tp1 tp2) = do
+      (fvs1, t1) <- annotateToplevel vs tp1
+      (fvs2, t2) <- annotateToplevel vs tp2
+      return (fvs1 `Set.union` fvs2, SzPair t1 t2)
+    annotateToplevel vs (n :-> p) = do
+      (fvsn, n') <- annotateSchema vs n
+      (fvsp, p') <- annotateToplevel (fvsn `Set.union` vs) p
+      return (fvsn `Set.union` fvsp, SzArr n' p')
 
-       -- returns: negative free variables, positive free variables, type
-      annotateArr vs n p = do
-        (fvsn, n') <- annotateSchema vs n
-        (nvsp, pvsp, p') <- annotateType (fvsn `Set.union` vs) p
-        return (fvsn `Set.union` nvsp,pvsp, SzArr n' p')        
+    -- returns: free variables, schema
+    annotateSchema _ (TyBase bt) = do
+      [i] <- freshVarIds 1
+      return (Set.singleton i, SzBase bt (Ix.bvar i))
+    -- annotateSchema vs (TyPair tp1 tp2) = do
+    --   (fvs1,t1) <- annotateSchema vs tp1
+    --   (fvs2,t2) <- annotateSchema vs tp2
+    --   return (fvs1 `Set.union` fvs2, SzPair t1 t2)
+    annotateSchema vs (n :-> p) = do
+      (nvs, pvs, SzArr n' p') <- annotateArr vs n p
+      return (pvs Set.\\ nvs, SzQArr (Set.toList nvs) n' p')
+
+    -- returns: negative free variables, positive free variables, type
+    annotateType vs (TyBase bt) = do
+      is <- freshVarIds width
+      let vs' = Set.fromList is `Set.union` vs
+      ix <- freshFun vs'
+      return (Set.empty, vs', SzBase bt ix)
+    annotateType vs (TyPair tp1 tp2) = do
+      (fvsn1, fvsp1, t1) <- annotateType vs tp1
+      (fvsn2, fvsp2, t2) <- annotateType vs tp2
+      return (fvsn1 `Set.union` fvsn2, fvsp1 `Set.union` fvsp2, SzPair t1 t2)
+    annotateType vs (n :-> p) = annotateArr vs n p
+
+    -- returns: negative free variables, positive free variables, type
+    annotateArr vs n p = do
+      (fvsn, n') <- annotateSchema vs n
+      (nvsp, pvsp, p') <- annotateType (fvsn `Set.union` vs) p
+      return (fvsn `Set.union` nvsp, pvsp, SzArr n' p')        
 
 
-abstractSignature :: Map FunId SimpleType -> CSAbstract -> Int -> [FunId] -> [AnnotatedRule]
-                     -> InferM (Signature Ix.Term)
+abstractSignature :: Map FunId SimpleType
+                  -> CSAbstract
+                  -> Int
+                  -> [FunId]
+                  -> [AnnotatedRule]
+                  -> InferM (Signature Ix.Term)
 abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do 
     ccs <- callContexts abstr ars <$> sequence [ maybe (declMissing f) return (initialCC f <$> Map.lookup f ssig) | f <- fs]
     signatureFromList <$> sequence [ do s <- maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
@@ -190,10 +194,10 @@ abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do
 
 matrix :: MonadUnique m => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
 matrix (SzBase bt ix) = return ([],SzBase bt ix)
-matrix (SzPair s1 s2) = do
-  (vs1,tp1) <- matrix s1
-  (vs2,tp2) <- matrix s2
-  return (vs1 ++ vs2,SzPair tp1 tp2)
+-- matrix (SzPair s1 s2) = do
+--   (vs1,tp1) <- matrix s1
+--   (vs2,tp2) <- matrix s2
+--   return (vs1 ++ vs2,SzPair tp1 tp2)
 matrix (SzQArr ixs n p) = do
   ixs' <- sequence [uniqueVar | _ <- ixs]
   let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
@@ -222,7 +226,7 @@ footprint l = logBlk "Footprint" $ fpInfer l
               PP.<+> PP.text ":" PP.<+> PP.pretty tp)
       return fp
     fpInfer_ (tview -> TConst (_ ::: s)) =
-      FP Map.empty <$> snd <$> matrix s
+      FP Map.empty . snd <$> matrix s
     fpInfer_ (tview -> TAppl t1 t2) = do
       FP ctx1 tp1 <- fpInfer t1
       case tp1 of
@@ -239,10 +243,10 @@ footprint l = logBlk "Footprint" $ fpInfer l
       case tp of
         SzBase _ a -> return (ctx, Ix.substFromList [(i,a)])
         _ -> throwError (IlltypedTerm t "base type" tp)
-    fpCheck (tview -> TPair t1 t2) (SzPair s1 s2) = do
-      (ctx1, sub1) <- fpCheck t1 s1
-      (ctx2, sub2) <- fpCheck t2 s2
-      return (ctx1 `Map.union` ctx2, sub1 `Ix.after` sub2) -- substitution domains disjoint per assumption
+    -- fpCheck (tview -> TPair t1 t2) (SzPair s1 s2) = do
+    --   (ctx1, sub1) <- fpCheck t1 s1
+    --   (ctx2, sub2) <- fpCheck t2 s2
+    --   return (ctx1 `Map.union` ctx2, sub1 `Ix.after` sub2) -- substitution domains disjoint per construction
     fpCheck t tp = throwError (IlltypedTerm t "non-functional type" tp)
   
 -- footprint (tview -> TAppl t (tview -> TVar (x ::: _))) = do
@@ -299,6 +303,7 @@ skolemTerm = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
 
 instantiate :: Schema Ix.Term -> InferCG (Type Ix.Term)
 instantiate (SzBase bt ix) = return (SzBase bt ix)
+-- instantiate (SzPair s1 s2) = SzPair <$> instantiate s1 <*> instantiate s2
 instantiate (SzQArr ixs n p) = do
   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm | ix <- ixs]
   return (SzArr (Ix.inst s n) (Ix.inst s p))
@@ -319,12 +324,6 @@ s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do
 SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
   t1 `subtypeOf_` t1'
   t2 `subtypeOf_` t2'  
--- s@SzQArr{} `subtypeOf_` t@SzArr{} = do
---   (_, t') <- matrix s
---   t' `subtypeOf_` t
--- t@SzArr{} `subtypeOf_` s@SzQArr{} = do
---   t' <- instantiate s
---   t `subtypeOf_` t'
 _ `subtypeOf_` _ = error "subtypeOf_: incompatible types"
 
 inferSizeType :: TypingContext -> SizeTypedTerm -> InferCG (Type Ix.Term)
@@ -394,8 +393,8 @@ generateConstraints :: CSAbstract -> Int -> Maybe [FunId] -> STAtrs
                     -> IO (Either SzTypingError (Signature Ix.Term, [Constraint])
                           , [AnnotatedRule]
                           , ExecutionLog)
-generateConstraints abstr width startSymbols sttrs = liftM withARS $ runInferM $ do
-    let rs = strRule `map` (rules sttrs)
+generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ do
+    let rs = strRule `map` rules sttrs
         ds = nub [f | Symbol f <- (headSymbol . lhs) `mapMaybe` rs]
         cs = nub [f | Symbol f <- rulesFuns rs] \\ ds
         fs = fromMaybe ds startSymbols ++ cs
@@ -406,9 +405,8 @@ generateConstraints abstr width startSymbols sttrs = liftM withARS $ runInferM $
       obligations abstr sig ars >>= concatMapM obligationToConstraints
     ccs <- logBlk "Constructor constraints" $ execInferCG $ 
       forM_ css $ \ (c,s) -> do
-        returnTpe s >>= \ tp -> case tp of {SzPair {} -> error (show c); _ -> return () } --TODO
         ix <- returnIndex s
-        record (ix :>=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
+        record (ix :=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
     return (sig,ocs ++ ccs)
   where 
     withARS (s,cs) = (s,ars,cs)

@@ -5,7 +5,7 @@ import           Data.Tree (Forest)
 import           HoSA.SizeType.Index
 import           HoSA.SizeType.Type
 
-import qualified GUBS as GUBS
+import qualified GUBS
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Control.Monad.IO.Class (MonadIO)
 
@@ -17,7 +17,9 @@ type CS = GUBS.ConstraintSystem Sym V
 type Processor m = GUBS.Processor Sym Integer V m
 
 toCS :: [Constraint] -> CS
-toCS cs = [ gterm l GUBS.:>=: gterm r | l :>=: r <- cs ] where --todo simplification?
+toCS = map gconstraint where
+  gconstraint (l :>=: r) = gterm l GUBS.:>=: gterm r --todo simplification?
+  gconstraint (l :=: r) = gterm l GUBS.:=: gterm r
   gterm Zero = 0
   gterm (Succ ix) = gterm ix + 1
   gterm (Sum ixs) = sum [gterm ix | ix <- ixs]

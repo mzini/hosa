@@ -51,7 +51,9 @@ data Term =
   | Var Var
   | MVar MetaVar
 
-data Constraint = Term :>=: Term
+data Constraint =
+  Term :>=: Term
+  | Term :=: Term
 
 infixr 0 :>=:
 
@@ -131,6 +133,7 @@ instance PP.Pretty Term where
 
 instance PP.Pretty Constraint where
   pretty (ix1 :>=: ix2) = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text ">=" PP.</> PP.pretty ix2
+  pretty (ix1 :=: ix2)  = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text "=" PP.</> PP.pretty ix2
 
 -- substitutions
 
