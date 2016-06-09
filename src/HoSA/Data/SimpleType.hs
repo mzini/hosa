@@ -13,11 +13,11 @@ where
 import           Data.Maybe (fromJust)
 import qualified Data.Map as M
 import           Control.Monad.Except
+import           Control.Monad.RWS
+import           Control.Monad.Reader
 import           Control.Monad.State
-import           Control.Monad.Writer
 import           Control.Arrow ((***), second)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import qualified Data.Rewriting.Applicative.Term as T
 import           HoSA.Data.Rewriting
 import           HoSA.Utils
 ----------------------------------------------------------------------
@@ -52,34 +52,33 @@ fvs (tp1 :-> tp2) = fvs tp1 ++ fvs tp2
 -- Simply Typed ATRS
 ----------------------------------------------------------------------
 
-type STTerm = TypedTerm SimpleType SimpleType
+type STTerm = Term (Symbol ::: SimpleType) (Variable ::: SimpleType)
 
-
-data STRule = STRule { strEnv       :: M.Map Variable SimpleType
-                     , strRule      :: Rule
-                     , strTypedRule :: TypedRule SimpleType SimpleType
-                     , strType      :: SimpleType }
+data STRule = STRule { strlEnv         :: M.Map Variable SimpleType
+                     , strlUntypedRule :: Rule Symbol Variable
+                     , strlTypedRule   :: Rule (Symbol ::: SimpleType) (Variable ::: SimpleType)
+                     , strlType        :: SimpleType }
                   
-data STAtrs = STAtrs { rules :: [STRule]
-                     , signature :: M.Map FunId SimpleType} 
+data STAtrs = STAtrs { statrsRules :: [STRule]
+                     , statrsSignature :: M.Map Symbol SimpleType} 
 
 
 typeOf :: STTerm -> SimpleType
-typeOf (T.Fun (Sym (Tuple ::: tp)) _) = tp
-typeOf (T.Fun (Sym (Symbol _ ::: tp)) []) = tp
-typeOf (T.Fun App [t1,t2]) =
+typeOf (Var (_ ::: tp)) = tp
+typeOf (Fun (_ ::: tp)) = tp
+typeOf (Pair t1 t2) = TyPair (typeOf t1) (typeOf t2)
+typeOf (Apply t1 t2) =
   case typeOf t1 of
     _ :-> tp -> tp
     _ -> error "SimpleType.typeOf: ill-typed applicant"
+typeOf (Let _ _ t2) = typeOf t2    
 
-withType :: M.Map Variable SimpleType -> M.Map FunId SimpleType -> Term -> STTerm
-withType env _   (view -> Var v) = tvar v (env M.! v)
-withType _   sig (view -> Const f) = tfun f (sig M.! f)
-withType env sig (view -> Pair t1 t2) = ttuple tt1 tt2 tp where
-      tt1 = withType env sig t1
-      tt2 = withType env sig t2
-      tp = TyPair (typeOf tt1) (typeOf tt2)
-withType env sig (view -> Appl t1 t2) = withType env sig t1 `app` withType env sig t2
+withType :: M.Map Variable SimpleType -> M.Map Symbol SimpleType -> Term Symbol Variable -> STTerm
+withType env sig = tmap (\ f -> f ::: sig M.! f) (\ v -> v ::: env M.! v)
+--   (Var v) = Var (v ::: env M.! v)
+-- withType _   sig (Fun f) = Fun (f ::: sig M.! f)
+-- withType env sig (Pair t1 t2) = Pair (withType env sig t1) (withType env sig t2)
+-- withType env sig (Apply t1 t2) = Apply (withType env sig t1) (withType env sig t2)
 
 
 ----------------------------------------------------------------------
@@ -116,7 +115,7 @@ ident = TyVar
 singleton :: TypeVariable -> TyExp -> Substitution
 singleton v tp = \ w -> if v == w then tp else TyVar w
 
-data UP = UP Rule Term TyExp TyExp
+data UP = UP (Rule Symbol Variable) (Term Symbol Variable) TyExp TyExp
 
 instance Substitutable UP where
   substitute s (UP rl t tp1 tp2) = UP rl t (substitute s tp1) (substitute s tp2)
@@ -140,94 +139,116 @@ unify = go ident where
 -- Inference
 ----------------------------------------------------------------------
 
-data TypingError = IncompatibleType Rule Term TyExp TyExp
+data TypingError =
+  IncompatibleType (Rule Symbol Variable) (Term Symbol Variable) TyExp TyExp
+  | LetInLHS (Rule Symbol Variable)
+  | VariableUndefined (Rule Symbol Variable) Variable
     
 newtype InferM a =
-  InferM (WriterT [UP] (StateT (Env FunId, Maybe (Env Variable)) (ExceptT TypingError UniqueM)) a)
-  deriving (Applicative, Functor, Monad
+  InferM (RWST () [UP] (Env Symbol) (ExceptT TypingError UniqueM) a)
+  deriving (  Applicative, Functor, Monad
             , MonadError TypingError
-            , MonadState (Env FunId, Maybe (Env Variable))
+            -- , MonadReader (Env Variable)
+            , MonadState (Env Symbol)
             , MonadWriter [UP]
             , MonadUnique)
 
-runInfer :: InferM a -> Either TypingError (a, Env FunId, Substitution)
+runInfer :: InferM a -> Either TypingError (a, Env Symbol, Substitution)
 runInfer (InferM m) = do
-  ((a,up), (sig,_)) <- run m
+  (a,sig, up) <- runUnique (runExceptT (runRWST m () M.empty))
   subst <- unify up
   return (a, substitute subst sig, subst)
-  where
-    run = runUnique . runExceptT . flip runStateT (M.empty, Nothing) . runWriterT
 
 freshTyExp :: InferM TyExp
 freshTyExp = TyVar <$> unique
 
-lookupFunTpe :: FunId -> InferM TyExp
+lookupFunTpe :: Symbol -> InferM TyExp
 lookupFunTpe f = do
-  (env, ctx)  <- get
+  env <- get
   case M.lookup f env of
     Nothing -> do
       tp <- freshTyExp
-      put (M.insert f tp env, ctx)
+      put (M.insert f tp env)
       return tp
     Just tp -> return tp
 
-lookupVarTpe :: Variable -> InferM TyExp
-lookupVarTpe v = do
-  (env, Just ctx)  <- get
-  case M.lookup v ctx of
-    Nothing -> do
-      tp <- freshTyExp
-      put (env, Just (M.insert v tp ctx))
-      return tp
-    Just tp -> return tp
+-- lookupVarTpe :: Variable -> InferM TyExp
+-- lookupVarTpe v = do
+--   (env, Just ctx)  <- get
+--   case M.lookup v ctx of
+--     Nothing -> do
+--       tp <- freshTyExp
+--       put (env, Just (M.insert v tp ctx))
+--       return tp
+--     Just tp -> return tp
 
-require :: Rule -> Term -> TyExp -> TyExp -> InferM ()
+require :: Rule Symbol Variable -> Term  Symbol Variable -> TyExp -> TyExp -> InferM ()
 require rl a tp1 tp2 = tell [UP rl a tp1 tp2]
 
-withContext :: InferM a -> InferM a
-withContext m = modify init *> m <* modify reset
+inferRule :: Rule Symbol Variable -> InferM (Env Variable, Rule Symbol Variable, TyExp)
+inferRule rl = do
+  (tp, env) <- flip runStateT M.empty $ inferL (lhs rl)
+  _ <- flip runReaderT env $ checkR (rhs rl) tp
+  return (env, rl, tp)
   where
-    init (env,_) = (env, Just M.empty)
-    reset (env,_) = (env, Nothing)    
-
-getContext :: InferM (Env Variable)
-getContext = fromJust <$> snd <$> get
-                       
-inferRule :: Rule -> InferM (Env Variable, Rule, TyExp)
-inferRule rl = withContext $ do
-  tp <- infer (lhs rl)
-  check (rhs rl) tp
-  (,rl, tp) <$> getContext
-  where 
-    infer (view -> Var v) = lookupVarTpe v
-    infer (view -> Const f) = lookupFunTpe f
-    infer (view -> Pair t1 t2) = 
-      TyPair <$> infer t1 <*> infer t2
-    infer (view -> Appl t1 t2) = do
-      v1 <- freshTyExp
-      v2 <- freshTyExp
-      check t1 (v1 :-> v2)
-      check t2 v1
+    inferL (Var v) = do
+      env <- get
+      case M.lookup v env of
+        Nothing -> do
+          tp <- lift freshTyExp
+          put (M.insert v tp env)
+          return tp
+        Just tp -> return tp
+    inferL (Fun f) = lift (lookupFunTpe f)
+    inferL (Pair t1 t2) = TyPair <$> inferL t1 <*> inferL t2
+    inferL (Apply t1 t2) = do
+      v1 <- lift freshTyExp
+      v2 <- lift freshTyExp
+      checkL t1 (v1 :-> v2)
+      checkL t2 v1
       return v2
-    infer _ = error "explode"
-    check t tp = do
-      tp' <- infer t
-      require rl t tp' tp
+    inferL (Let {}) = throwError (LetInLHS rl)      
+    checkL t tp = do
+      tp' <- inferL t
+      lift (require rl t tp' tp)
+      
+    inferR (Var v) = do
+      env <- ask
+      case M.lookup v env of
+        Nothing -> throwError (VariableUndefined rl v)
+        Just tp -> return tp
+    inferR (Fun f) = lift (lookupFunTpe f)
+    inferR (Pair t1 t2) = 
+      TyPair <$> inferR t1 <*> inferR t2
+    inferR (Apply t1 t2) = do
+      v1 <- lift freshTyExp
+      v2 <- lift freshTyExp
+      checkR t1 (v1 :-> v2)
+      checkR t2 v1
+      return v2
+    inferR (Let t1 (x,y) t2) = do
+      v1 <- lift freshTyExp
+      v2 <- lift freshTyExp
+      checkR t1 (TyPair v1 v2)
+      local (M.insert x v1 . M.insert y v2) (inferR t2)
+    checkR t tp = do
+      tp' <- inferR t
+      lift (require rl t tp' tp)
 
-inferSimpleType :: [Rule] -> Either TypingError STAtrs
-inferSimpleType rs = toSTAtrs <$> runInfer (mapM inferRule rs) where
-  toSTAtrs (rs', sig, subst) = flip evalState (M.empty,0 :: Int) $ do
+inferSimpleType :: ATRS Symbol Variable -> Either TypingError STAtrs
+inferSimpleType atrs = toSTAtrs <$> runInfer (mapM inferRule (rules atrs)) where
+  toSTAtrs (rs, sig, subst) = flip evalState (M.empty,0 :: Int) $ do
     gsig <- toGroundEnv sig
-    strs <- toGroundSTRule subst gsig `mapM` rs'
-    return STAtrs { rules = strs, signature = gsig }
+    strs <- toGroundSTRule subst gsig `mapM` rs
+    return STAtrs { statrsRules = strs, statrsSignature = gsig }
     
   toGroundSTRule subst gsig (env, rl, tp) = do
     genv <- toGroundEnv (substitute subst env)
     gtp <- toGroundTpe (substitute subst tp)
-    return STRule { strEnv = genv
-                  , strRule = rl
-                  , strTypedRule = rule (withType genv gsig (lhs rl)) (withType genv gsig (rhs rl))
-                  , strType = gtp }
+    return STRule { strlEnv = genv
+                  , strlUntypedRule = rl
+                  , strlTypedRule = Rule (withType genv gsig (lhs rl)) (withType genv gsig (rhs rl))
+                  , strlType = gtp }
 
   toGroundEnv env = traverse toGroundTpe env
 
@@ -272,5 +293,10 @@ instance PP.Pretty TypingError where
           PP.<+> PP.text "has type"
           PP.<+> PP.squotes (PP.pretty has)
           PP.<> PP.text ", but" PP.<+> PP.squotes (PP.pretty expected) PP.<+> PP.text "is expected."
+  pretty (LetInLHS rl) =
+    PP.text "Let in lhs encountered:"
+    PP.<$> PP.indent 2 (PP.pretty rl)    
+  pretty (VariableUndefined rl v) =
+    PP.text "Variable" PP.<+> PP.squotes (PP.pretty v) PP.<+> PP.text "undefined:"
+    PP.<$> PP.indent 2 (PP.pretty rl)  
     
-

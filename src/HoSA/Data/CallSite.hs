@@ -1,48 +1,47 @@
 module HoSA.Data.CallSite where
 
-import           Data.Maybe (catMaybes)
 import           Data.Map (Map)
 import           HoSA.Utils
 import           HoSA.Data.SimpleType
-import qualified HoSA.Data.Rewriting as R
-import qualified Data.Rewriting.Applicative.Term as T
+import           HoSA.Data.Rewriting
 import           HoSA.Data.Rewriting ((:::)(..))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 
-data CallSite = CallSite (R.FunId ::: SimpleType) Int
+data CallSite = CallSite (Symbol ::: SimpleType) Int
 
 data CallCtx = CallCtx CallSite [CallSite] deriving (Eq)
 
 instance Eq CallSite where
     CallSite (f ::: _) i == CallSite (g ::: _) j = f == g && i == j
 
-type AnnotatedTerm = R.ATerm (Maybe CallSite) R.Variable
+type AnnotatedTerm = Term CallSite Variable
 
-data AnnotatedRule = AR { lhs :: R.Term
-                        , rhs :: R.Term
-                        , arhs :: AnnotatedTerm
-                        , ruleEnv :: Map R.Variable SimpleType
-                        , ruleType :: SimpleType }
+data AnnotatedRule = AR { arlRule :: STRule
+                        , arlAnnotatedRhs :: AnnotatedTerm }
+
+arlEnv :: AnnotatedRule -> Map Variable SimpleType
+arlEnv = strlEnv . arlRule
+
+arlUntypedRule :: AnnotatedRule -> Rule Symbol Variable
+arlUntypedRule = strlUntypedRule . arlRule
+
+arlType :: AnnotatedRule -> SimpleType
+arlType = strlType . arlRule
 
 calls :: AnnotatedRule -> [CallSite]
-calls = catMaybes . R.funs . arhs
+calls = funs . arlAnnotatedRhs
 
 withCallSites :: STAtrs -> [AnnotatedRule]
-withCallSites satrs = runUnique (annotateRule `mapM` rules satrs) where
-  annotateRule strl = do
-    let rl = strRule strl
-        trl = strTypedRule strl
-    r <- annotate (R.rhs trl)
-    return AR { lhs = R.lhs rl, rhs = R.rhs rl, arhs = r, ruleEnv = strEnv strl, ruleType = strType strl}
-  annotate (R.tview -> R.TVar (v ::: _)) = return (T.var v)
-  annotate (R.tview -> R.TAppl t1 t2) = T.app <$> annotate t1 <*> annotate t2
-  annotate (R.tview -> R.TPair t1 t2) = tup <$> annotate t1 <*> annotate t2 where
-    tup a b = T.fun Nothing [a,b]
-  annotate (R.tview -> R.TConst (f ::: tp)) = 
-    T.fun <$> (Just <$> CallSite (f ::: tp) <$> uniqueToInt <$> unique) <*> return []
+withCallSites satrs = runUnique (annotateRule `mapM` statrsRules satrs) where
+  annotateRule strl = AR strl <$> annotate (rhs (strlTypedRule strl))
+  annotate (Var (v ::: _)) = return (Var v)
+  annotate (Fun (f ::: tp)) = Fun <$> (CallSite (f ::: tp) <$> uniqueToInt <$> unique)
+  annotate (Apply t1 t2) = Apply <$> annotate t1 <*> annotate t2
+  annotate (Pair t1 t2) = Pair <$> annotate t1 <*> annotate t2
+  annotate (Let t1 (x ::: _, y ::: _) t2) = Let <$> annotate t1 <*> return (x,y) <*> annotate t2  
 
-initialCC :: R.FunId -> SimpleType -> CallCtx
+initialCC :: Symbol -> SimpleType -> CallCtx
 initialCC f tp = CallCtx (CallSite (f ::: tp) 0) []
 
 type CSAbstract = CallSite -> CallCtx -> CallCtx
@@ -59,7 +58,7 @@ kca n cs@(CallSite (f ::: tp) _) (CallCtx cs' css')
    firstOrder (tp1 :-> tp2) = dataType tp1 && firstOrder tp2
    firstOrder tp = dataType tp
 
-ctxSym :: CallCtx -> R.FunId
+ctxSym :: CallCtx -> Symbol
 ctxSym (CallCtx (CallSite (f ::: _) _) _) = f
 
 callContexts :: CSAbstract -> [AnnotatedRule] -> [CallCtx] -> [CallCtx]
@@ -70,7 +69,7 @@ callContexts abstr ars = walk [] where
     | otherwise = walk (cc : seen) (succs cc ++ ccs)
 
   succs cc@(CallCtx (CallSite (f ::: _) _) _) =
-    [ abstr c cc | arl <- ars, R.headSymbol (lhs arl) == Just (R.Symbol f), c <- calls arl]    
+    [ abstr c cc | arl <- ars, headSymbol (lhs (strlUntypedRule (arlRule arl))) == Just f, c <- calls arl]    
 
 -- pretty printing
 
@@ -82,19 +81,12 @@ instance PP.Pretty CallCtx where
     loc = PP.hcat $ PP.punctuate (PP.text ".") [PP.int j | j <- [k | CallSite _ k <- cs : css]]
 
 instance {-# OVERLAPPING  #-} PP.Pretty AnnotatedTerm where
-  pretty = PP.pretty . T.amap toSym id where
-    toSym Nothing = R.Tuple
-    toSym (Just (CallSite (R.FunId f ::: _) i)) = R.Symbol (R.FunId (f ++ "@" ++ show i))
-    -- pp _ (T.aterm -> T.TVar v) = PP.pretty v
-    -- pp _ (T.aterm -> T.TConst f) = PP.pretty f
-    -- pp _ (T.aterm -> T.TFun Nothing [t1,t2]) = 
-    --   PP.parens (ppSeq (PP.text ", ") [ pp id t1, pp id t2])
-    -- pp par (T.aterm -> t1 T.:@ t2) =
-    --   par (pp id t1 PP.</> pp PP.parens t2)
-
+  pretty = PP.pretty . tmap toSym id where
+    toSym (CallSite (Symbol f ::: _) i) = Symbol (f ++ "@" ++ show i)
   
 instance PP.Pretty AnnotatedRule where
-  pretty rl = PP.group (PP.pretty (ruleEnv rl))
+  pretty rl = PP.group (PP.pretty (arlEnv rl))
     PP.<+> PP.text "⊢"
-    PP.</> PP.hang 2 (prettyRl (lhs rl) (arhs rl) PP.<+> PP.text ":" PP.<+> PP.pretty (ruleType rl))
-    where prettyRl l r = PP.pretty l PP.<+> PP.text "=" PP.</> PP.pretty r
+    PP.</> PP.hang 2 (prettyRl (lhs (arlUntypedRule rl)) (arlAnnotatedRhs rl) PP.<+> PP.text ":" PP.<+> PP.pretty (arlType rl))
+    where
+      prettyRl l r = PP.pretty l PP.<+> PP.text "=" PP.</> PP.pretty r

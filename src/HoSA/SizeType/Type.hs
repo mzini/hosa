@@ -54,7 +54,7 @@ fvars = nub . walk where
 
 -- signature
 
-newtype Signature ix = Signature { signatureToMap :: Map.Map FunId [(CallCtx,Schema ix)] }
+newtype Signature ix = Signature { signatureToMap :: Map.Map Symbol [(CallCtx,Schema ix)] }
 
 signatureFromList :: [(CallCtx,Schema ix)] -> Signature ix
 signatureFromList = Signature . foldl insert Map.empty where
@@ -63,7 +63,7 @@ signatureFromList = Signature . foldl insert Map.empty where
 signatureToList :: Signature ix -> [(CallCtx,Schema ix)]
 signatureToList = concat . Map.elems . signatureToMap
 
-lookupSchemas :: FunId -> Signature ix -> [(CallCtx, Schema ix)]
+lookupSchemas :: Symbol -> Signature ix -> [(CallCtx, Schema ix)]
 lookupSchemas f = fromMaybe [] . Map.lookup f . signatureToMap
 
 lookupSchema :: CallCtx -> Signature ix -> Maybe (Schema ix)

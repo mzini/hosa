@@ -26,6 +26,7 @@ import System.IO (hPutStrLn, Handle, stderr)
 import           Control.Monad.State
 import           Control.Monad.Writer
 import           Control.Monad.Except
+import           Control.Monad.RWS
 import           Control.Monad.Trace
 import Control.Monad.Identity (Identity, runIdentity)
 
@@ -110,7 +111,7 @@ uniques n = replicateM n unique
 
 instance MonadUnique m => MonadUnique (ExceptT e m) where unique = lift unique
 instance MonadUnique m => MonadUnique (TraceT t m) where unique = lift unique
-instance MonadUnique m => MonadUnique (StateT t m) where unique = lift unique
+instance (Monoid w, MonadUnique m) => MonadUnique (RWST r w s m) where unique = lift unique
 instance (Monoid w, MonadUnique m) => MonadUnique (WriterT w m) where unique = lift unique
 
   

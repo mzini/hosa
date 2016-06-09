@@ -20,7 +20,7 @@ import qualified HoSA.SizeType.Index as Ix
 import qualified HoSA.Data.SimpleType as ST
 import qualified HoSA.SizeType.Solve as S
 import qualified HoSA.SizeType.Type as SzT
-import GUBS
+import GUBS hiding (Symbol, Variable)
 
 deriving instance Typeable (SMTSolver)
 deriving instance Data (SMTSolver)
@@ -76,17 +76,17 @@ putExecLog l = do
 status :: PP.Pretty e => String -> e -> RunM ()
 status n e = liftIO (putDocLn (PP.text n PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
 
-readATRS :: RunM [Rule]
+readATRS :: RunM (ATRS Symbol Variable)
 readATRS = reader input >>= fromFile >>= assertRight ParseError 
 
-inferSimpleTypes :: [Rule] -> RunM ST.STAtrs
+inferSimpleTypes :: ATRS Symbol Variable -> RunM ST.STAtrs
 inferSimpleTypes = assertRight SimpleTypeError . ST.inferSimpleType
 
 generateConstraints :: ST.STAtrs -> RunM (SzT.Signature Ix.Term, [C.AnnotatedRule], [Ix.Constraint])
 generateConstraints stars = do 
   abstr <- reader abstraction
   w <- reader width
-  ms <- fmap (map FunId) <$> reader mainIs
+  ms <- fmap (map Symbol) <$> reader mainIs
   (res,ars,l) <- liftIO (I.generateConstraints abstr w ms stars)
   putExecLog l
   (\(s,c) -> (s,ars,c)) <$> assertRight SizeTypeError res
@@ -103,11 +103,11 @@ runHosa = do
   cfg <- cmdArgs defaultConfig
   flip runReaderT cfg $ runExceptT $ do
     atrs <- readATRS >>= inferSimpleTypes
-    -- status "ATRS" (PP.pretty (ST.strRule `map` ST.rules atrs))
-    -- status "Simple Type Signature" (PP.pretty (ST.signature atrs))
+    -- status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules atrs))
+    -- status "Simple Type Signature" (PP.pretty (ST.statrsSignature atrs))
     (asig,ars,cs) <- generateConstraints atrs
     status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
-                           PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.signature atrs)))
+                           PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.statrsSignature atrs)))
     sig <- solveConstraints asig cs
     status "Signature" sig
     return ()

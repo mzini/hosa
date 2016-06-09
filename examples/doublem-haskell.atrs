@@ -11,11 +11,11 @@ addT t1 Z = t1;
 addT t1 (T t2) = T (addT t1 t2);
 
 return a = (a, Z);
-bind (a, t) fm = bindHlp t (fm a);
-bindHlp t1 (b, t2) = (b, addT t1 t2);
-tick (a, t) = (a, T t);
+bind p fm = let p be (a, t) in bindHlp t (fm a);
+bindHlp t1 p = let p be (b, t2) in (b, addT t1 t2);
+tick p = let p be (a,t) in (a, T t);
 
-succm (x, t) = (S x, t);
+succm p = let p be (x,t) in (S x, t);
 addm x 0 = tick (return x);
 addm x (S y) = tick (succm (addm x y));
 

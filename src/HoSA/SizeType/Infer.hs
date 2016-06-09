@@ -13,7 +13,6 @@ import           Data.Tree
 import qualified Constraints.Set.Solver as SetSolver
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-import qualified Data.Rewriting.Applicative.Term as T
 import           HoSA.Utils
 import           HoSA.Data.Rewriting
 import           HoSA.Data.SimpleType
@@ -29,9 +28,12 @@ import           HoSA.SizeType.Type
 -- common types
 --------------------------------------------------------------------------------
 
-type TypingContext = Map Variable (Schema Ix.Term)
+type TypingContext = Map Variable (Either (Type Ix.Term) (Schema Ix.Term))
 
-type SizeTypedTerm = TypedTerm (Schema Ix.Term) ()
+type SizeTypedTerm = Term (Symbol ::: Schema Ix.Term) Variable
+
+unType :: SizeTypedTerm -> Term Symbol Variable
+unType = tmap (\ (f ::: _) -> f) id
 
 data Footprint = FP TypingContext (Type Ix.Term)
 
@@ -95,7 +97,7 @@ data SzTypingError where
   IllformedLhs :: SizeTypedTerm -> SzTypingError
   IllformedRhs :: SizeTypedTerm -> SzTypingError
   IlltypedTerm :: SizeTypedTerm -> String -> SizeType knd Ix.Term -> SzTypingError
-  DeclarationMissing :: FunId -> SzTypingError
+  DeclarationMissing :: Symbol -> SzTypingError
 
 instance PP.Pretty SzTypingError where
   pretty (IllformedLhs t) =
@@ -172,10 +174,10 @@ abstractSchema width = runUniqueT . annotate
       return (fvsn `Set.union` nvsp, pvsp, SzArr n' p')        
 
 
-abstractSignature :: Map FunId SimpleType
+abstractSignature :: Map Symbol SimpleType
                   -> CSAbstract
                   -> Int
-                  -> [FunId]
+                  -> [Symbol]
                   -> [AnnotatedRule]
                   -> InferM (Signature Ix.Term)
 abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do 
@@ -225,9 +227,9 @@ footprint l = logBlk "Footprint" $ fpInfer l
               PP.<+> PP.pretty (unType t)
               PP.<+> PP.text ":" PP.<+> PP.pretty tp)
       return fp
-    fpInfer_ (tview -> TConst (_ ::: s)) =
+    fpInfer_ (Fun (_ ::: s)) =
       FP Map.empty . snd <$> matrix s
-    fpInfer_ (tview -> TAppl t1 t2) = do
+    fpInfer_ (Apply t1 t2) = do
       FP ctx1 tp1 <- fpInfer t1
       case tp1 of
         SzArr n p -> do
@@ -236,66 +238,41 @@ footprint l = logBlk "Footprint" $ fpInfer l
         _ -> throwError (IlltypedTerm t1 "function type" tp1)
     fpInfer_ t = throwError (IllformedLhs l)
 
-    fpCheck (tview -> TVar (v ::: _)) s =
-      return (Map.singleton v s, Ix.idSubst)
+    fpCheck (Var v) s =
+      return (Map.singleton v (Right s), Ix.idSubst)
     fpCheck t (SzBase _ (Ix.Var (Ix.FVar i))) = do
       FP ctx tp <- fpInfer t
       case tp of
         SzBase _ a -> return (ctx, Ix.substFromList [(i,a)])
         _ -> throwError (IlltypedTerm t "base type" tp)
-    -- fpCheck (tview -> TPair t1 t2) (SzPair s1 s2) = do
-    --   (ctx1, sub1) <- fpCheck t1 s1
-    --   (ctx2, sub2) <- fpCheck t2 s2
-    --   return (ctx1 `Map.union` ctx2, sub1 `Ix.after` sub2) -- substitution domains disjoint per construction
     fpCheck t tp = throwError (IlltypedTerm t "non-functional type" tp)
-  
--- footprint (tview -> TAppl t (tview -> TVar (x ::: _))) = do
---   (ctx,tp) <- footprint t
---   case tp of
---     SzArr n p -> return (Map.insert x n ctx, p)
---     _ -> throwError (IlltypedTerm t "function type" tp)
--- footprint (tview -> TPair t1 t2) = do
---   (ctx1,tp1) <- footprint t1
---   (ctx2,tp2) <- footprint t2
---   return (ctx1 `Map.union` ctx2, SzPair tp1 tp2)
--- footprint (tview -> TAppl t1 t2) = do
---   (ctx1,tp1) <- footprint t1
---   (ctx2,tp2) <- footprint t2
---   case (tp1,tp2) of
---     (SzArr (SzBase _ (Ix.Var (Ix.FVar i))) tp, SzBase _ a) ->
---       return (ctx1 `Map.union` ctx2, Ix.substFromList [(i,a)] `Ix.o` tp)
---     (_,SzArr _ _) -> throwError (IlltypedTerm t2 "base type" tp2)
---     _ -> throwError (IlltypedTerm t1 "function on base type" tp1)
--- TODO    
--- footprint (tview -> TVar (x ::: s)) = do
---   tp <- snd <$> matrix s
---   return (Map.singleton x tp, tp)
-              
 
 obligations :: CSAbstract -> Signature Ix.Term -> [AnnotatedRule] -> InferM [Obligation]
 obligations abstr sig ars = step `concatMapM` signatureToList sig where
   step (cc,s) =
-    sequence [ do FP ctx tp <- footprint l
-                  return (ctx :- annotatedRhs cc (arhs arl) ::: tp)
+    sequence [ do FP ctx tp <- footprint alhs
+                  return (ctx :- annotateRhs cc (arlAnnotatedRhs arl) ::: tp)
              | arl <- ars
-             , headSymbol (C.lhs arl) == Just (Symbol (ctxSym cc))
-             , l <- annotatedLhss s (C.lhs arl) ]
+             , let l = lhs (C.arlUntypedRule arl)
+             , headSymbol l == Just (ctxSym cc)
+             , alhs <- annotateLhss s l ]
 
   -- TODO
-  annotatedLhss _ (view -> Var _) = error "Infer.annotatedLhss :: LHS not head variable free"
-  annotatedLhss s (view -> Const f) = [tfun f s]
-  annotatedLhss s (view -> Appl l1 l2) = app <$> annotatedLhss s l1 <*> annotatedArgs l2 where
-    annotatedArgs (view -> Var v) = [tvar v ()]
-    annotatedArgs (view -> Const f) = [ tfun f s' | (_,s') <- lookupSchemas f sig ]
-    annotatedArgs (view -> Appl t1 t2) = app <$> annotatedArgs t1 <*> annotatedArgs t2
-    annotatedArgs (view -> Pair t1 t2) = tup <$> annotatedArgs t1 <*> annotatedArgs t2
-      where tup a b = T.fun (Tuple ::: undefined) [a,b] -- todo
+  annotateLhss s (Fun f) = [Fun (f:::s)]
+  annotateLhss s (Apply l1 l2) = Apply <$> annotateLhss s l1 <*> annotateArgs l2 where
+    annotateArgs (Var v) = [Var v]
+    annotateArgs (Fun f) = [ Fun (f:::s') | (_,s') <- lookupSchemas f sig ]
+    annotateArgs (Apply t1 t2) = Apply <$> annotateArgs t1 <*> annotateArgs t2
+    annotateArgs (Pair t1 t2) = Pair <$> annotateArgs t1 <*> annotateArgs t2
+    annotateArgs Let {} = error "Infer.annotateLhss :: LHS contains let expression"
+  annotateLhss _ _ = error "Infer.annotateLhss :: LHS not head variable free"
 
-  annotatedRhs _ (T.aterm -> T.TVar v) = tvar v ()
-  annotatedRhs cc (T.aterm -> T.TConst (Just cs@(CallSite (f ::: _) _))) = tfun f s where
+  annotateRhs _ (Var v) = Var v
+  annotateRhs cc (Fun cs@(CallSite (f ::: _) _)) = Fun (f:::s) where
     Just s = lookupSchema (abstr cs cc) sig
-  annotatedRhs cc (T.aterm -> T.TFun Nothing [t1,t2]) = T.fun (Tuple ::: undefined) [annotatedRhs cc t1, annotatedRhs cc t2] -- todo
-  annotatedRhs cc (T.aterm -> t1 T.:@ t2) = app (annotatedRhs cc t1) (annotatedRhs cc t2)
+  annotateRhs cc (Pair t1 t2) = Pair (annotateRhs cc t1) (annotateRhs cc t2)
+  annotateRhs cc (Apply t1 t2) = Apply (annotateRhs cc t1) (annotateRhs cc t2)
+  annotateRhs cc (Let t1 vs t2) = Let (annotateRhs cc t1) vs (annotateRhs cc t2)  
 
 
 skolemTerm :: InferCG Ix.Term
@@ -327,22 +304,21 @@ SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
 _ `subtypeOf_` _ = error "subtypeOf_: incompatible types"
 
 inferSizeType :: TypingContext -> SizeTypedTerm -> InferCG (Type Ix.Term)
-inferSizeType ctx t@(tview -> TVar (v ::: _)) = do
-  tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= instantiate
+inferSizeType ctx t@(Var v) = do
+  tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= either return instantiate 
   logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty v PP.<+> PP.text ":" PP.<+> PP.pretty tp)    
   return tp
-inferSizeType _ (tview -> TConst (f ::: s)) = do
+inferSizeType _ (Fun (f ::: s)) = do
   tp <- instantiate s
   logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty f PP.<+> PP.text ":" PP.<+> PP.pretty tp)
   return tp
-inferSizeType ctx t@(tview -> TPair t1 t2) =  do
+inferSizeType ctx t@(Pair t1 t2) =  do
   tp1 <- inferSizeType ctx t1
   tp2 <- inferSizeType ctx t2
   let tp = SzPair tp1 tp2
   logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty tp)
   return tp
-  
-inferSizeType ctx t@(tview -> TAppl t1 t2) =
+inferSizeType ctx t@(Apply t1 t2) =
   logBlk (PP.text "infer" PP.<+> PP.pretty (unType t) PP.<+> PP.text "...") $ do
   tp1 <- inferSizeType ctx t1
   case tp1 of
@@ -353,8 +329,17 @@ inferSizeType ctx t@(tview -> TAppl t1 t2) =
       logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty tBdy)
       return tBdy
     _ -> throwError (IlltypedTerm t1 "function type" tp1)
-inferSizeType _ _ = error "HoSA.Infer.inferSizeType: illformed term given"    
-
+inferSizeType ctx t@(Let t1 (x,y) t2) =
+  logBlk (PP.text "infer" PP.<+> PP.pretty (unType t) PP.<+> PP.text "...") $ do
+  tp1 <- inferSizeType ctx t1
+  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty (unType t1) PP.<+> PP.text ":" PP.<+> PP.pretty tp1)
+  case tp1 of
+    SzPair tpx tpy -> do
+      let ctx' = Map.insert x (Left tpx) (Map.insert y (Left tpy) ctx)
+      tp <- inferSizeType ctx' t2
+      logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty (unType t2) PP.<+> PP.text ":" PP.<+> PP.pretty tp)
+      return tp
+    _ -> throwError (IlltypedTerm t1 "pair type" tp1)
 
 obligationToConstraints :: Obligation -> InferM [Constraint]
 obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars cs; return cs } where
@@ -389,16 +374,16 @@ obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars 
 
 
 
-generateConstraints :: CSAbstract -> Int -> Maybe [FunId] -> STAtrs
+generateConstraints :: CSAbstract -> Int -> Maybe [Symbol] -> STAtrs
                     -> IO (Either SzTypingError (Signature Ix.Term, [Constraint])
                           , [AnnotatedRule]
                           , ExecutionLog)
 generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ do
-    let rs = strRule `map` rules sttrs
-        ds = nub [f | Symbol f <- (headSymbol . lhs) `mapMaybe` rs]
-        cs = nub [f | Symbol f <- rulesFuns rs] \\ ds
+    let rs = strlUntypedRule `map` statrsRules sttrs
+        ds = nub $ (headSymbol . lhs) `mapMaybe` rs
+        cs = nub (funs rs) \\ ds
         fs = fromMaybe ds startSymbols ++ cs
-    sig <- abstractSignature (signature sttrs) abstr width fs ars
+    sig <- abstractSignature (statrsSignature sttrs) abstr width fs ars
     let css = [ (ctxSym ctx, s) | (ctx,s) <- signatureToList sig, ctxSym ctx `elem` cs ]
 
     ocs <- logBlk "Orientation constraints" $ 
@@ -419,7 +404,7 @@ instance PP.Pretty TypingContext where
   pretty m
     | Map.null m = PP.text "Ø"
     | otherwise = PP.hcat $ PP.punctuate (PP.text ", ")
-      [ PP.pretty v PP.<+> PP.text ":" PP.<+> PP.pretty s | (v,s) <- Map.toList m ]
+      [ PP.pretty v PP.<+> PP.text ":" PP.<+> either PP.pretty PP.pretty e | (v,e) <- Map.toList m ]
   
 instance PP.Pretty Obligation where
   pretty (ctx :- t ::: s) =
