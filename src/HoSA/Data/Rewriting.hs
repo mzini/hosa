@@ -8,9 +8,14 @@ module HoSA.Data.Rewriting (
   -- * Operations
   , TermLike (..)
   , tmap
+  , tmapM
   , headSymbol
+  , sexpr
+  , fromSexpr
   , fvars
   , funs
+  , isValue
+  , definedP
   -- * Parsing
   , fromFile
   , ParseError
@@ -23,6 +28,8 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Text.Parsec
 import Text.ParserCombinators.Parsec (CharParser)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Data.Map as M
+import Data.Maybe (isJust)
 import HoSA.Utils (ppSeq)
 
 ----------------------------------------------------------------------
@@ -47,6 +54,15 @@ tmap f g (Pair t1 t2) = Pair (tmap f g t1) (tmap f g t2)
 tmap f g (Apply t1 t2) = Apply (tmap f g t1) (tmap f g t2)
 tmap f g (Let t1 (x1,x2) t2) = Let (tmap f g t1) (g x1,g x2) (tmap f g t2)
 
+tmapM :: Applicative m => (f -> m f') -> (v -> m v') -> Term f v -> m (Term f' v')
+tmapM _ g (Var v) = Var <$> g v
+tmapM f _ (Fun s) = Fun <$> f s
+tmapM f g (Pair t1 t2) = Pair <$> tmapM f g t1 <*> tmapM f g t2
+tmapM f g (Apply t1 t2) = Apply <$> tmapM f g t1 <*> tmapM f g t2
+tmapM f g (Let t1 (x1,x2) t2) =
+  Let <$> tmapM f g t1 <*> ((,) <$> g x1 <*> g x2) <*> tmapM f g t2
+
+
 headSymbol :: Term f v -> Maybe f
 headSymbol (Fun f) = Just f
 headSymbol (Apply t1 _) = headSymbol t1
@@ -54,6 +70,12 @@ headSymbol Var {} = Nothing
 headSymbol Pair {} = Nothing
 headSymbol Let {} = Nothing
 
+sexpr :: Term f v -> (Term f v, [Term f v])
+sexpr (Apply t1 t2) = (h, rest ++ [t2]) where (h,rest) = sexpr t1
+sexpr t = (t,[])
+
+fromSexpr :: Term f v -> [Term f v] -> Term f v
+fromSexpr = foldl Apply
 
 -- term like structures
 
@@ -91,9 +113,9 @@ instance Eq v => TermLike (Rule f v) where
   funsDL rl = funsDL (lhs rl) . funsDL (rhs rl)
   fvarsDL rl = fvarsDL (lhs rl) . fvarsDL (rhs rl)  
 
-instance Eq v => TermLike [Rule f v] where
-  type S [Rule f v] = f
-  type V [Rule f v] = v
+instance TermLike a => TermLike [a] where
+  type S [a] = S a
+  type V [a] = V a
   funsDL = flip (foldr funsDL)
   fvarsDL = flip (foldr fvarsDL)
   
@@ -102,12 +124,41 @@ instance Eq v => TermLike (ATRS f v) where
   type V (ATRS f v) = v
   funsDL = funsDL . rules
   fvarsDL = fvarsDL . rules
-               
+
+type Subst f v = M.Map v (Term f v)
+
+-- TODO defined only on simple terms
+matchLinear :: (Eq f, Ord v) => Term f v -> Term f v -> Maybe (Subst f v)
+matchLinear (Var v) t = Just (M.fromList [(v,t)])
+matchLinear (Fun f) (Fun g)
+  | f == g = Just M.empty
+matchLinear (Apply t1 t2) (Apply t1' t2') = 
+  M.union <$> matchLinear t1 t1' <*> matchLinear t2 t2'
+matchLinear (Pair t1 t2) (Pair t1' t2') = 
+  M.union <$> matchLinear t1 t1' <*> matchLinear t2 t2'
+matchLinear Let {} _ = error "matchLinear not implemented for let"
+matchLinear _ Let {} = error "matchLinear not implemented for let"
+matchLinear _ _ = Nothing
+
+-- TODO sound only on simple terms
+isValue :: (Eq f, Ord v) => ATRS f v -> Term f v -> Bool
+isValue atrs t = any isJust [matchLinear (lhs rl) t | rl <- rules atrs ]
+  
+
 ----------------------------------------------------------------------
 -- Parsing
 ----------------------------------------------------------------------
 
-newtype Symbol = Symbol String deriving (Eq, Ord, Show)
+data Symbol = Defined {symbolName :: String }
+            | Constr  {symbolName :: String }
+            deriving (Eq, Ord, Show)
+
+definedP :: Symbol -> Bool
+definedP Defined {} = True
+definedP Constr {} = False
+
+
+
 newtype Variable = Variable String deriving (Eq, Ord, Show)
 
 type Parser = CharParser ()
@@ -144,10 +195,10 @@ variable :: Parser Variable
 variable = Variable <$> identifier ((:) <$> lower <*> ident) <?> "variable"
 
 constructor :: Parser Symbol
-constructor = Symbol <$> identifier ((:) <$> (try upper <|> digit) <*> ident) <?> "constructor"
+constructor = Constr <$> identifier ((:) <$> (try upper <|> digit) <*> ident) <?> "constructor"
 
 symbol :: Parser Symbol
-symbol = Symbol <$> identifier ((:) <$> lower <*> ident) <?> "symbol"
+symbol = Defined <$> identifier ((:) <$> lower <*> ident) <?> "symbol"
 
 parens :: Parser a -> Parser a
 parens = between (char '(' >> notFollowedBy (char '*')) (lexeme (char ')'))
@@ -165,11 +216,11 @@ pair pa pb = parens $ do
   b <- pb
   return (a,b)
 
--- parsers
-----------------------------------------------------------------------
-
 reservedWords :: [String]
 reservedWords = words "let be in ; ="
+
+-- parsers
+----------------------------------------------------------------------
 
 lhsP :: Parser (Term Symbol Variable)
 lhsP = application (s <?> "function") arg where
@@ -225,7 +276,7 @@ rulesP = do {rs <- ruleP `endBy` sep; return rs} where
 -- pretty printing
 ----------------------------------------------------------------------
 
-instance PP.Pretty Symbol where pretty (Symbol n) = PP.bold (PP.text n)
+instance PP.Pretty Symbol where pretty f = PP.bold (PP.text (symbolName f))
 instance PP.Pretty Variable where pretty (Variable v) = PP.text v
 
 ppTuple :: (PP.Pretty a, PP.Pretty b) => (a,b) -> PP.Doc
@@ -240,9 +291,8 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Term f v) where
     pp par (Apply t1 t2) =
       par (pp id t1 PP.</> pp PP.parens t2)
     pp par (Let t1 (x,y) t2) =
-      par (PP.text "let" PP.<+> pp id t1
-           PP.<+> PP.text "be" PP.<+> ppTuple (x,y)
-           PP.<+> PP.text "in" PP.</> PP.pretty t2)
+      par (PP.align (PP.text "let" PP.<+> ppTuple (x,y) PP.<+> PP.text "=" PP.<+> pp id t1
+                     PP.<$> PP.hang 3 (PP.text "in" PP.<+> PP.pretty t2)))
           
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Rule f v) where
   pretty rl = PP.pretty (lhs rl) PP.<+> PP.text "=" PP.</> PP.pretty (rhs rl)
@@ -251,7 +301,7 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Rule f v) where
 -- Typing
 ----------------------------------------------------------------------
 
-data e ::: t = e ::: t
+data e ::: t = e ::: t deriving (Eq, Ord, Show)
 infixr 1 :::    
 
 

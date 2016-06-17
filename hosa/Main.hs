@@ -13,6 +13,7 @@ import System.Exit
 
 import qualified Data.Map as M
 import           HoSA.Utils
+import           HoSA.Ticking
 import           HoSA.Data.Rewriting
 import qualified HoSA.Data.CallSite as C
 import qualified HoSA.SizeType.Infer as I
@@ -20,7 +21,7 @@ import qualified HoSA.SizeType.Index as Ix
 import qualified HoSA.Data.SimpleType as ST
 import qualified HoSA.SizeType.Solve as S
 import qualified HoSA.SizeType.Type as SzT
-import GUBS hiding (Symbol, Variable)
+import GUBS hiding (Symbol, Variable, Var)
 
 deriving instance Typeable (SMTSolver)
 deriving instance Data (SMTSolver)
@@ -47,7 +48,7 @@ defaultConfig =
        , clength = 0 &= help "length of call-site contexts" }
   &= help "Infer size-types for given ATRS"
 
-abstraction :: HoSA -> C.CSAbstract
+abstraction :: HoSA -> C.CSAbstract f
 abstraction cfg = C.kca (clength cfg)
 
 constraintProcessor :: MonadIO m => HoSA -> S.Processor m
@@ -61,8 +62,8 @@ constraintProcessor cfg =
     simplify = exhaustive (propagateUp <=> propagateDown)
 
 data Error = ParseError ParseError
-           | SimpleTypeError ST.TypingError
-           | SizeTypeError I.SzTypingError
+           | SimpleTypeError (ST.TypingError Symbol Variable)
+           | SizeTypeError (I.SzTypingError TSymbol TVariable)
            | ConstraintUnsolvable
 
 type RunM = ExceptT Error (ReaderT HoSA IO)    
@@ -79,19 +80,19 @@ status n e = liftIO (putDocLn (PP.text n PP.<$> PP.indent 2 (PP.pretty e)) >> pu
 readATRS :: RunM (ATRS Symbol Variable)
 readATRS = reader input >>= fromFile >>= assertRight ParseError 
 
-inferSimpleTypes :: ATRS Symbol Variable -> RunM ST.STAtrs
+inferSimpleTypes :: ATRS Symbol Variable -> RunM (ST.STAtrs Symbol Variable)
 inferSimpleTypes = assertRight SimpleTypeError . ST.inferSimpleType
 
-generateConstraints :: ST.STAtrs -> RunM (SzT.Signature Ix.Term, [C.AnnotatedRule], [Ix.Constraint])
+generateConstraints :: ST.STAtrs TSymbol TVariable -> RunM (SzT.Signature TSymbol Ix.Term, [C.AnnotatedRule TSymbol TVariable], [Ix.Constraint])
 generateConstraints stars = do 
   abstr <- reader abstraction
   w <- reader width
-  ms <- fmap (map Symbol) <$> reader mainIs
+  ms <- return Nothing -- TODO fmap (map Symbol) <$> reader mainIs
   (res,ars,l) <- liftIO (I.generateConstraints abstr w ms stars)
   putExecLog l
   (\(s,c) -> (s,ars,c)) <$> assertRight SizeTypeError res
 
-solveConstraints ::  SzT.Signature Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature (S.Polynomial Integer))
+solveConstraints ::  SzT.Signature TSymbol Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature TSymbol (S.Polynomial Integer))
 solveConstraints asig cs = do 
   p <- reader constraintProcessor  
   (msig,l) <- S.solveConstraints p asig cs
@@ -102,12 +103,12 @@ runHosa :: IO (Either Error ())
 runHosa = do
   cfg <- cmdArgs defaultConfig
   flip runReaderT cfg $ runExceptT $ do
-    atrs <- readATRS >>= inferSimpleTypes
-    -- status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules atrs))
-    -- status "Simple Type Signature" (PP.pretty (ST.statrsSignature atrs))
-    (asig,ars,cs) <- generateConstraints atrs
+    statrs <- tickATRS <$> (readATRS >>= inferSimpleTypes)
+    status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules statrs))
+    status "Simple Type Signature" (PP.pretty (ST.statrsSignature statrs))
+    (asig,ars,cs) <- generateConstraints statrs
     status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
-                           PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.statrsSignature atrs)))
+                           PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.statrsSignature statrs)))
     sig <- solveConstraints asig cs
     status "Signature" sig
     return ()
@@ -130,8 +131,5 @@ instance PP.Pretty Error where
     PP.indent 2 (PP.pretty e)
   pretty ConstraintUnsolvable = 
     PP.text "Constraints cannot be solved"
-  -- pretty (NonSimpleApplicative (f,i)) =
-  --   PP.text "ATRS contains non-constant symbol"
-  --   PP.<+> PP.squotes (PP.text f) PP.<+> PP.text "of arity" PP.<+> PP.int i
 
 

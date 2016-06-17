@@ -45,10 +45,10 @@ interpretType inter (SzPair t1 t2) = SzPair (interpretType inter t1) (interpretT
 interpretType inter (SzArr n t) = SzArr (interpretType inter n) (interpretType inter t)
 interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (interpretType inter t)
 
-interpretSig :: (Eq c, Num c) => Interpretation c -> Signature Term -> Signature (Polynomial c)
+interpretSig :: (Eq c, Num c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
 interpretSig inter = mapSignature (interpretType inter)
 
-solveConstraints :: MonadIO m => Processor m -> Signature Term -> [Constraint] -> m (Maybe (Signature (Polynomial Integer)), Forest String)
+solveConstraints :: MonadIO m => Processor m -> Signature f Term -> [Constraint] -> m (Maybe (Signature f (Polynomial Integer)), Forest String)
 solveConstraints p sig cs = first fromAnswer <$> toCS cs `GUBS.solveWith` p where
   fromAnswer (GUBS.Sat i) = Just (interpretSig i sig)
   fromAnswer _ = Nothing

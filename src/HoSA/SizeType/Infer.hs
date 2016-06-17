@@ -15,7 +15,7 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           HoSA.Utils
 import           HoSA.Data.Rewriting
-import           HoSA.Data.SimpleType
+import           HoSA.Data.SimpleType hiding (unType, Signature)
 import           HoSA.Data.CallSite hiding (lhs, rhs)
 import qualified HoSA.Data.CallSite as C
 import           HoSA.SizeType.Index (Constraint(..))
@@ -28,16 +28,16 @@ import           HoSA.SizeType.Type
 -- common types
 --------------------------------------------------------------------------------
 
-type TypingContext = Map Variable (Either (Type Ix.Term) (Schema Ix.Term))
+type TypingContext v = Map v (Either (Type Ix.Term) (Schema Ix.Term))
 
-type SizeTypedTerm = Term (Symbol ::: Schema Ix.Term) Variable
+type SizeTypedTerm f v = Term (f ::: Schema Ix.Term) v
 
-unType :: SizeTypedTerm -> Term Symbol Variable
+unType :: SizeTypedTerm f v -> Term f v 
 unType = tmap (\ (f ::: _) -> f) id
 
-data Footprint = FP TypingContext (Type Ix.Term)
+data Footprint v = FP (TypingContext v) (Type Ix.Term)
 
-data Obligation = TypingContext :- (SizeTypedTerm ::: Type Ix.Term)
+data Obligation f v = TypingContext v :- (SizeTypedTerm f v ::: Type Ix.Term)
 infixl 0 :-
 
 --------------------------------------------------------------------------------
@@ -46,32 +46,32 @@ infixl 0 :-
 
 type ExecutionLog = Forest String
 
-newtype InferM a =
-  InferM { runInferM_ :: ExceptT SzTypingError (TraceT String (UniqueT IO)) a }
+newtype InferM f v a =
+  InferM { runInferM_ :: ExceptT (SzTypingError f v) (TraceT String (UniqueT IO)) a }
   deriving (Applicative, Functor, Monad
             , MonadTrace String
-            , MonadError SzTypingError
+            , MonadError (SzTypingError f v)
             , MonadUnique
             , MonadIO)
 
-runInferM :: InferM a -> IO (Either SzTypingError a, ExecutionLog)
+runInferM :: InferM f v a -> IO (Either (SzTypingError f v) a, ExecutionLog)
 runInferM = runUniqueT . runTraceT . runExceptT . runInferM_
   
-newtype InferCG a = InferCG { runInferCG_ :: WriterT [Constraint] InferM a }
+newtype InferCG f v a = InferCG { runInferCG_ :: WriterT [Constraint] (InferM f v) a }
   deriving (Applicative, Functor, Monad
-            , MonadError SzTypingError
+            , MonadError (SzTypingError f v)
             , MonadWriter [Constraint]
             , MonadUnique
             , MonadTrace String
             , MonadIO)
 
-execInferCG ::InferCG a -> InferM [Constraint]
+execInferCG ::InferCG f v a -> InferM f v [Constraint]
 execInferCG = execWriterT . runInferCG_
 
-liftInferM ::InferM a -> InferCG a
+liftInferM ::InferM f v a -> InferCG f v a
 liftInferM = InferCG . lift
   
-record :: Constraint -> InferCG ()
+record :: Constraint -> InferCG f v ()
 record cs = tell [cs] >> logMsg (PP.text "〈" PP.<+> PP.pretty cs PP.<+> PP.text "〉")
 
 -- variable supply and logging
@@ -93,13 +93,13 @@ logBlk = scopeTrace . renderPretty
 -- errors
 --------------------------------------------------------------------------------
 
-data SzTypingError where
-  IllformedLhs :: SizeTypedTerm -> SzTypingError
-  IllformedRhs :: SizeTypedTerm -> SzTypingError
-  IlltypedTerm :: SizeTypedTerm -> String -> SizeType knd Ix.Term -> SzTypingError
-  DeclarationMissing :: Symbol -> SzTypingError
+data SzTypingError f v where
+  IllformedLhs :: SizeTypedTerm f v -> SzTypingError f v
+  IllformedRhs :: SizeTypedTerm f v -> SzTypingError f v
+  IlltypedTerm :: SizeTypedTerm f v -> String -> SizeType knd Ix.Term -> SzTypingError f v
+  DeclarationMissing :: f -> SzTypingError f v
 
-instance PP.Pretty SzTypingError where
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (SzTypingError f v) where
   pretty (IllformedLhs t) =
     PP.hang 2 (PP.text "Illformed left-hand side encountered:"
                PP.</> PP.pretty (unType t))
@@ -118,7 +118,7 @@ instance PP.Pretty SzTypingError where
 --------------------------------------------------------------------------------
 
 
-abstractSchema :: Int -> SimpleType -> InferM (Schema Ix.Term)
+abstractSchema :: Int -> SimpleType -> InferM f v (Schema Ix.Term)
 abstractSchema width = runUniqueT . annotate
   where
     freshVarIds n = map uniqueToInt <$> uniques n
@@ -134,7 +134,7 @@ abstractSchema width = runUniqueT . annotate
     annotateToplevel vs (TyBase bt) = do
       t <- SzBase bt <$> freshFun vs
       return (Set.empty, t)
-    annotateToplevel vs (TyPair tp1 tp2) = do
+    annotateToplevel vs (tp1 :*: tp2) = do
       (fvs1, t1) <- annotateToplevel vs tp1
       (fvs2, t2) <- annotateToplevel vs tp2
       return (fvs1 `Set.union` fvs2, SzPair t1 t2)
@@ -161,7 +161,7 @@ abstractSchema width = runUniqueT . annotate
       let vs' = Set.fromList is `Set.union` vs
       ix <- freshFun vs'
       return (Set.empty, vs', SzBase bt ix)
-    annotateType vs (TyPair tp1 tp2) = do
+    annotateType vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotateType vs tp1
       (fvsn2, fvsp2, t2) <- annotateType vs tp2
       return (fvsn1 `Set.union` fvsn2, fvsp1 `Set.union` fvsp2, SzPair t1 t2)
@@ -174,12 +174,8 @@ abstractSchema width = runUniqueT . annotate
       return (fvsn `Set.union` nvsp, pvsp, SzArr n' p')        
 
 
-abstractSignature :: Map Symbol SimpleType
-                  -> CSAbstract
-                  -> Int
-                  -> [Symbol]
-                  -> [AnnotatedRule]
-                  -> InferM (Signature Ix.Term)
+abstractSignature :: (Eq v, Ord f, PP.Pretty f) =>
+  Map f SimpleType -> CSAbstract f -> Int -> [f] -> [AnnotatedRule f v] -> InferM f v (Signature f Ix.Term)
 abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do 
     ccs <- callContexts abstr ars <$> sequence [ maybe (declMissing f) return (initialCC f <$> Map.lookup f ssig) | f <- fs]
     signatureFromList <$> sequence [ do s <- maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
@@ -218,7 +214,7 @@ returnIndex (SzArr _ p) = returnIndex p
 returnIndex s@SzQArr{} = matrix s >>= returnIndex . snd
 returnIndex SzPair{} = error "returnIndex on pairs not defined"
 
-footprint :: SizeTypedTerm -> InferM Footprint
+footprint :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SizeTypedTerm f v -> InferM f v (Footprint v)
 footprint l = logBlk "Footprint" $ fpInfer l
   where
     fpInfer t = do
@@ -247,7 +243,7 @@ footprint l = logBlk "Footprint" $ fpInfer l
         _ -> throwError (IlltypedTerm t "base type" tp)
     fpCheck t tp = throwError (IlltypedTerm t "non-functional type" tp)
 
-obligations :: CSAbstract -> Signature Ix.Term -> [AnnotatedRule] -> InferM [Obligation]
+obligations :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => CSAbstract f -> Signature f Ix.Term -> [AnnotatedRule f v] -> InferM f v [Obligation f v]
 obligations abstr sig ars = step `concatMapM` signatureToList sig where
   step (cc,s) =
     sequence [ do FP ctx tp <- footprint alhs
@@ -275,20 +271,20 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
   annotateRhs cc (Let t1 vs t2) = Let (annotateRhs cc t1) vs (annotateRhs cc t2)  
 
 
-skolemTerm :: InferCG Ix.Term
+skolemTerm :: InferCG f v Ix.Term
 skolemTerm = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
 
-instantiate :: Schema Ix.Term -> InferCG (Type Ix.Term)
+instantiate :: Schema Ix.Term -> InferCG f v (Type Ix.Term)
 instantiate (SzBase bt ix) = return (SzBase bt ix)
 -- instantiate (SzPair s1 s2) = SzPair <$> instantiate s1 <*> instantiate s2
 instantiate (SzQArr ixs n p) = do
   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm | ix <- ixs]
   return (SzArr (Ix.inst s n) (Ix.inst s p))
 
-subtypeOf :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG ()
+subtypeOf :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v ()
 t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2
 
-subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG ()
+subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v ()
 SzBase bt1 ix1 `subtypeOf_` SzBase bt2 ix2
   | bt1 == bt2 = record (ix2 :>=: ix1)
 SzArr n p `subtypeOf_` SzArr m q = do
@@ -303,7 +299,7 @@ SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
   t2 `subtypeOf_` t2'  
 _ `subtypeOf_` _ = error "subtypeOf_: incompatible types"
 
-inferSizeType :: TypingContext -> SizeTypedTerm -> InferCG (Type Ix.Term)
+inferSizeType :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedTerm f v -> InferCG f v (Type Ix.Term)
 inferSizeType ctx t@(Var v) = do
   tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= either return instantiate 
   logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty v PP.<+> PP.text ":" PP.<+> PP.pretty tp)    
@@ -341,7 +337,7 @@ inferSizeType ctx t@(Let t1 (x,y) t2) =
       return tp
     _ -> throwError (IlltypedTerm t1 "pair type" tp1)
 
-obligationToConstraints :: Obligation -> InferM [Constraint]
+obligationToConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligation f v -> InferM f v [Constraint]
 obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars cs; return cs } where
   check (ctx :- t ::: tp) = execInferCG $ do
     tp' <- inferSizeType ctx t
@@ -374,9 +370,9 @@ obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars 
 
 
 
-generateConstraints :: CSAbstract -> Int -> Maybe [Symbol] -> STAtrs
-                    -> IO (Either SzTypingError (Signature Ix.Term, [Constraint])
-                          , [AnnotatedRule]
+generateConstraints :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => CSAbstract f -> Int -> Maybe [f] -> STAtrs f v
+                    -> IO (Either (SzTypingError f v) (Signature f Ix.Term, [Constraint])
+                          , [AnnotatedRule f v]
                           , ExecutionLog)
 generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ do
     let rs = strlUntypedRule `map` statrsRules sttrs
@@ -400,18 +396,18 @@ generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ 
 -- pretty printers
 --------------------------------------------------------------------------------
 
-instance PP.Pretty TypingContext where
+instance PP.Pretty v => PP.Pretty (TypingContext v) where
   pretty m
     | Map.null m = PP.text "Ø"
     | otherwise = PP.hcat $ PP.punctuate (PP.text ", ")
       [ PP.pretty v PP.<+> PP.text ":" PP.<+> either PP.pretty PP.pretty e | (v,e) <- Map.toList m ]
   
-instance PP.Pretty Obligation where
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Obligation f v) where
   pretty (ctx :- t ::: s) =
     PP.pretty ctx
     PP.<+> PP.text "⊦" PP.<+> PP.pretty (unType t)
     PP.<+> PP.text ":" PP.<+> PP.pretty s
 
-instance PP.Pretty Footprint where
+instance PP.Pretty v => PP.Pretty (Footprint v) where
   pretty (FP ctx tp) =
     PP.parens (PP.pretty ctx PP.<> PP.comma PP.<+> PP.pretty tp)

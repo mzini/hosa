@@ -8,31 +8,31 @@ import           HoSA.Data.Rewriting ((:::)(..))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 
-data CallSite = CallSite (Symbol ::: SimpleType) Int
+data CallSite f = CallSite (f ::: SimpleType) Int
 
-data CallCtx = CallCtx CallSite [CallSite] deriving (Eq)
+data CallCtx f = CallCtx (CallSite f) [CallSite f] deriving (Eq)
 
-instance Eq CallSite where
+instance Eq f => Eq (CallSite f) where
     CallSite (f ::: _) i == CallSite (g ::: _) j = f == g && i == j
 
-type AnnotatedTerm = Term CallSite Variable
+type AnnotatedTerm f v = Term (CallSite f) v
 
-data AnnotatedRule = AR { arlRule :: STRule
-                        , arlAnnotatedRhs :: AnnotatedTerm }
+data AnnotatedRule f v = AR { arlRule :: STRule f v
+                            , arlAnnotatedRhs :: AnnotatedTerm f v }
 
-arlEnv :: AnnotatedRule -> Map Variable SimpleType
+arlEnv :: AnnotatedRule f v -> Map v SimpleType
 arlEnv = strlEnv . arlRule
 
-arlUntypedRule :: AnnotatedRule -> Rule Symbol Variable
+arlUntypedRule :: AnnotatedRule f v -> Rule f v
 arlUntypedRule = strlUntypedRule . arlRule
 
-arlType :: AnnotatedRule -> SimpleType
+arlType :: AnnotatedRule f v -> SimpleType
 arlType = strlType . arlRule
 
-calls :: AnnotatedRule -> [CallSite]
+calls :: Eq v => AnnotatedRule f v -> [CallSite f]
 calls = funs . arlAnnotatedRhs
 
-withCallSites :: STAtrs -> [AnnotatedRule]
+withCallSites :: STAtrs f v -> [AnnotatedRule f v]
 withCallSites satrs = runUnique (annotateRule `mapM` statrsRules satrs) where
   annotateRule strl = AR strl <$> annotate (rhs (strlTypedRule strl))
   annotate (Var (v ::: _)) = return (Var v)
@@ -41,27 +41,27 @@ withCallSites satrs = runUnique (annotateRule `mapM` statrsRules satrs) where
   annotate (Pair t1 t2) = Pair <$> annotate t1 <*> annotate t2
   annotate (Let t1 (x ::: _, y ::: _) t2) = Let <$> annotate t1 <*> return (x,y) <*> annotate t2  
 
-initialCC :: Symbol -> SimpleType -> CallCtx
+initialCC :: f -> SimpleType -> CallCtx f
 initialCC f tp = CallCtx (CallSite (f ::: tp) 0) []
 
-type CSAbstract = CallSite -> CallCtx -> CallCtx
+type CSAbstract f = CallSite f -> CallCtx f -> CallCtx f
 
-kca :: Int -> CSAbstract
+kca :: Int -> CSAbstract f
 kca n cs@(CallSite (f ::: tp) _) (CallCtx cs' css')
   | n <= 0 || firstOrder tp = CallCtx (CallSite (f ::: tp) 0) []
   | n == 1 = CallCtx cs []
   | otherwise = CallCtx cs (take (n - 1) (cs' : css'))
  where
    dataType TyBase{} = True
-   dataType (TyPair a b) = dataType a && dataType b
+   dataType (a :*: b) = dataType a && dataType b
    dataType _ = False
    firstOrder (tp1 :-> tp2) = dataType tp1 && firstOrder tp2
    firstOrder tp = dataType tp
 
-ctxSym :: CallCtx -> Symbol
+ctxSym :: CallCtx f -> f
 ctxSym (CallCtx (CallSite (f ::: _) _) _) = f
 
-callContexts :: CSAbstract -> [AnnotatedRule] -> [CallCtx] -> [CallCtx]
+callContexts :: (Eq v, Eq f) => CSAbstract f -> [AnnotatedRule f v] -> [CallCtx f] -> [CallCtx f]
 callContexts abstr ars = walk [] where
   walk seen [] = seen
   walk seen (cc : ccs)
@@ -73,18 +73,18 @@ callContexts abstr ars = walk [] where
 
 -- pretty printing
 
-instance PP.Pretty CallSite where
+instance PP.Pretty f => PP.Pretty (CallSite f) where
   pretty (CallSite (f ::: _) i) = PP.pretty f PP.<> PP.text "@" PP.<> PP.int i
 
-instance PP.Pretty CallCtx where
+instance PP.Pretty f => PP.Pretty (CallCtx f) where
   pretty (CallCtx cs@(CallSite (f ::: _) _) css) = PP.pretty f PP.<> PP.text "@" PP.<> loc where
     loc = PP.hcat $ PP.punctuate (PP.text ".") [PP.int j | j <- [k | CallSite _ k <- cs : css]]
 
-instance {-# OVERLAPPING  #-} PP.Pretty AnnotatedTerm where
-  pretty = PP.pretty . tmap toSym id where
-    toSym (CallSite (Symbol f ::: _) i) = Symbol (f ++ "@" ++ show i)
+-- instance {-# OVERLAPPING  #-} (PP.Pretty f, PP.Pretty v) => PP.Pretty (AnnotatedTerm f v) where
+--   pretty = PP.pretty . tmap toSym id where
+--     toSym (CallSite (Symbol f ::: _) i) = Symbol (f ++ "@" ++ show i)
   
-instance PP.Pretty AnnotatedRule where
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (AnnotatedRule f v) where
   pretty rl = PP.group (PP.pretty (arlEnv rl))
     PP.<+> PP.text "⊢"
     PP.</> PP.hang 2 (prettyRl (lhs (arlUntypedRule rl)) (arlAnnotatedRhs rl) PP.<+> PP.text ":" PP.<+> PP.pretty (arlType rl))
