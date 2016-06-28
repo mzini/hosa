@@ -2,7 +2,8 @@ module HoSA.Ticking
   (tickATRS
   , ntickATRS
   , TSymbol
-  , TVariable)
+  , TVariable
+  , TickedAtrs)
 where
 
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
@@ -75,7 +76,7 @@ type TickM a = UniqueM a
 
 freshVar :: SimpleType -> TickM (TVariable ::: SimpleType)
 freshVar tp = do
-  v <- Fresh <$> uniqueToInt <$> unique
+  v <- Fresh . uniqueToInt <$> unique
   return (v ::: tp)
 
 -- types
@@ -161,10 +162,26 @@ tickATRS statrs = STAtrs { statrsRules = rs
          ++ auxRules ar `concatMap` signatureToDecls (statrsSignature statrs)
 
 ntickATRS :: STAtrs Symbol Variable -> TickedAtrs
-ntickATRS statrs = undefined
+ntickATRS statrs = STAtrs { statrsRules = rs
+                          , statrsSignature = signatureFromDecls (funs rs) }
+  where
+    rs = liftSTRule `map` statrsRules statrs
+    liftSTRule STRule { .. } = STRule { strlEnv = M.mapKeys IdentV strlEnv
+                                      , strlUntypedRule = liftRule liftUTTerm strlUntypedRule
+                                      , strlTypedRule = liftRule liftTTerm strlTypedRule
+                                      , strlType = strlType}
+
+    liftRule f (Rule l r) = Rule (f l) (f r)
+    liftTTerm = tmap (\ (f ::: tp) -> liftFun f ::: tp) (\ (v ::: tp) -> IdentV v ::: tp)
+    liftUTTerm = tmap liftFun IdentV
+    liftFun (Defined f) = TSymbol f 0
+    liftFun (Constr f) = TConstr f
+      
+                   
          
 -- pretty printers
 instance PP.Pretty TSymbol where
+  pretty (TSymbol f 0) = PP.pretty (Defined f)
   pretty (TSymbol f i) = PP.pretty (Defined (f ++ "#" ++ show i))
   pretty (TConstr n) = PP.pretty (Constr n)
   pretty Tick = PP.text "T"

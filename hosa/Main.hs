@@ -33,7 +33,8 @@ data HoSA = HoSA { width :: Int
                  , solver :: SMTSolver
                  , verbose :: Bool
                  , mainIs :: Maybe [String]
-                 , smtStrategy :: SMTStrategy                  
+                 , smtStrategy :: SMTStrategy
+                 , unticked :: Bool
                  , input :: FilePath}
           deriving (Show, Data, Typeable)
 
@@ -44,6 +45,7 @@ defaultConfig =
        , solver = MiniSmt &= help "SMT solver (minismt, z3)"
        , mainIs = Nothing &= help "Main function to analyse"
        , verbose = False
+       , unticked = False
        , smtStrategy = Simple  &= help "SMT solver (simple, SCC)"
        , clength = 0 &= help "length of call-site contexts" }
   &= help "Infer size-types for given ATRS"
@@ -51,6 +53,10 @@ defaultConfig =
 abstraction :: HoSA -> C.CSAbstract f
 abstraction cfg = C.kca (clength cfg)
 
+tickingFn :: HoSA -> ST.STAtrs Symbol Variable -> ST.STAtrs TSymbol TVariable
+tickingFn cfg | unticked cfg = ntickATRS
+              | otherwise = tickATRS
+              
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
@@ -103,7 +109,8 @@ runHosa :: IO (Either Error ())
 runHosa = do
   cfg <- cmdArgs defaultConfig
   runUniqueT $ flip runReaderT cfg $ runExceptT $ do
-    statrs <- tickATRS <$> (readATRS >>= inferSimpleTypes)
+    tick <- reader tickingFn
+    statrs <- tick <$> (readATRS >>= inferSimpleTypes)
     -- status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules statrs))
     -- status "Simple Type Signature" (PP.pretty (ST.statrsSignature statrs))
     (asig,ars,cs) <- generateConstraints statrs

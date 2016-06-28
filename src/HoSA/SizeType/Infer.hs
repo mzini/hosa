@@ -299,8 +299,9 @@ s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do
   (vs,t1) <- matrix s1
   (_, t2) <- matrix s2
   t2' <- instantiate s2
-  notOccur vs `mapM` foldMap Ix.metaVars t1  
-  notOccur vs `mapM` foldMap Ix.metaVars t2
+  logBlk (PP.text "occurs check") $ do 
+    notOccur vs `mapM` foldMap Ix.metaVars t1  
+    notOccur vs `mapM` foldMap Ix.metaVars t2
   t1 `subtypeOf_` t2'
 SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
   t1 `subtypeOf_` t1'
