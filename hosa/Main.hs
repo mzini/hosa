@@ -19,7 +19,7 @@ import qualified HoSA.Data.CallSite as C
 import qualified HoSA.SizeType.Infer as I
 import qualified HoSA.SizeType.Index as Ix
 import qualified HoSA.Data.SimpleType as ST
-import qualified HoSA.SizeType.Solve as S
+import qualified HoSA.SizeType.SOConstraint as SOCS
 import qualified HoSA.SizeType.Type as SzT
 import GUBS hiding (Symbol, Variable, Var)
 
@@ -51,7 +51,7 @@ defaultConfig =
 abstraction :: HoSA -> C.CSAbstract f
 abstraction cfg = C.kca (clength cfg)
 
-constraintProcessor :: MonadIO m => HoSA -> S.Processor m
+constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
     Simple -> try simplify ==> simple
@@ -66,7 +66,7 @@ data Error = ParseError ParseError
            | SizeTypeError (I.SzTypingError TSymbol TVariable)
            | ConstraintUnsolvable
 
-type RunM = ExceptT Error (ReaderT HoSA IO)    
+type RunM = ExceptT Error (ReaderT HoSA (UniqueT IO))
 
 putExecLog :: Forest String -> RunM ()
 putExecLog l = do 
@@ -83,29 +83,29 @@ readATRS = reader input >>= fromFile >>= assertRight ParseError
 inferSimpleTypes :: ATRS Symbol Variable -> RunM (ST.STAtrs Symbol Variable)
 inferSimpleTypes = assertRight SimpleTypeError . ST.inferSimpleType
 
-generateConstraints :: ST.STAtrs TSymbol TVariable -> RunM (SzT.Signature TSymbol Ix.Term, [C.AnnotatedRule TSymbol TVariable], [Ix.Constraint])
+generateConstraints :: ST.STAtrs TSymbol TVariable -> RunM (SzT.Signature TSymbol Ix.Term, [C.AnnotatedRule TSymbol TVariable], SOCS.SOCS)
 generateConstraints stars = do 
   abstr <- reader abstraction
   w <- reader width
   ms <- return Nothing -- TODO fmap (map Symbol) <$> reader mainIs
-  (res,ars,l) <- liftIO (I.generateConstraints abstr w ms stars)
+  (res,ars,l) <- lift (lift (I.generateConstraints abstr w ms stars))
   putExecLog l
   (\(s,c) -> (s,ars,c)) <$> assertRight SizeTypeError res
 
-solveConstraints ::  SzT.Signature TSymbol Ix.Term -> [Ix.Constraint] -> RunM (SzT.Signature TSymbol (S.Polynomial Integer))
+solveConstraints ::  SzT.Signature TSymbol Ix.Term -> SOCS.SOCS -> RunM (SzT.Signature TSymbol (SOCS.Polynomial Integer))
 solveConstraints asig cs = do 
   p <- reader constraintProcessor  
-  (msig,l) <- S.solveConstraints p asig cs
+  (msig,l) <- lift (lift (SOCS.solveConstraints p asig cs))
   putExecLog l
   assertJust ConstraintUnsolvable msig
 
 runHosa :: IO (Either Error ())
 runHosa = do
   cfg <- cmdArgs defaultConfig
-  flip runReaderT cfg $ runExceptT $ do
+  runUniqueT $ flip runReaderT cfg $ runExceptT $ do
     statrs <- tickATRS <$> (readATRS >>= inferSimpleTypes)
-    status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules statrs))
-    status "Simple Type Signature" (PP.pretty (ST.statrsSignature statrs))
+    -- status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules statrs))
+    -- status "Simple Type Signature" (PP.pretty (ST.statrsSignature statrs))
     (asig,ars,cs) <- generateConstraints statrs
     status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
                            PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.statrsSignature statrs)))

@@ -18,7 +18,7 @@ library
                        HoSA.SizeType.Type                  
                        HoSA.SizeType.Index
                        HoSA.SizeType.Infer
-                       HoSA.SizeType.Solve
+                       HoSA.SizeType.SOConstraint
   other-extensions:    
   build-depends:       ansi-wl-pprint >= 0.6 && < 0.7,
                        base >= 4.8 && <4.9,

@@ -4,13 +4,12 @@ import           Control.Monad.Except
 import           Control.Monad.Trace
 import           Control.Monad.Writer
 import           Data.List (nub, (\\))
+import           Data.Foldable
 import           Data.Maybe (fromMaybe, mapMaybe)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import           Data.Either (rights)
 import           Data.Tree
-import qualified Constraints.Set.Solver as SetSolver
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           HoSA.Utils
@@ -21,6 +20,7 @@ import qualified HoSA.Data.CallSite as C
 import           HoSA.SizeType.Index (Constraint(..))
 import qualified HoSA.SizeType.Index as Ix
 import           HoSA.SizeType.Type
+import           HoSA.SizeType.SOConstraint (SOCS (..))
 
 
 
@@ -54,25 +54,37 @@ newtype InferM f v a =
             , MonadUnique
             , MonadIO)
 
-runInferM :: InferM f v a -> IO (Either (SzTypingError f v) a, ExecutionLog)
-runInferM = runUniqueT . runTraceT . runExceptT . runInferM_
+runInferM :: InferM f v a -> UniqueT IO (Either (SzTypingError f v) a, ExecutionLog)
+runInferM = runTraceT . runExceptT . runInferM_
   
-newtype InferCG f v a = InferCG { runInferCG_ :: WriterT [Constraint] (InferM f v) a }
+newtype InferCG f v a = InferCG { runInferCG_ :: WriterT (SOCS) (InferM f v) a }
   deriving (Applicative, Functor, Monad
             , MonadError (SzTypingError f v)
-            , MonadWriter [Constraint]
+            , MonadWriter SOCS
             , MonadUnique
             , MonadTrace String
             , MonadIO)
 
-execInferCG ::InferCG f v a -> InferM f v [Constraint]
+execInferCG ::InferCG f v a -> InferM f v SOCS
 execInferCG = execWriterT . runInferCG_
 
 liftInferM ::InferM f v a -> InferCG f v a
 liftInferM = InferCG . lift
-  
-record :: Constraint -> InferCG f v ()
-record cs = tell [cs] >> logMsg (PP.text "〈" PP.<+> PP.pretty cs PP.<+> PP.text "〉")
+
+  -- notOccur vs `mapM` Ix.metaVars t2
+
+notOccur :: [Ix.VarId] -> Ix.MetaVar -> InferCG f v ()
+notOccur vs mv = do
+  tell (SOCS [] [ Ix.NOccur v mv | v <- vs])
+  logMsg (PP.text "〈"
+           PP.<+> PP.pretty vs
+           PP.<+> PP.text "notin" PP.<+> PP.pretty mv
+           PP.<+> PP.text "〉")
+
+require :: Constraint -> InferCG f v ()
+require cs = do
+  tell (SOCS [cs] [])
+  logMsg (PP.text "〈" PP.<+> PP.pretty cs PP.<+> PP.text "〉")
 
 -- variable supply and logging
 --------------------------------------------------------------------------------
@@ -197,16 +209,9 @@ matrix (SzBase bt ix) = return ([],SzBase bt ix)
 --   (vs2,tp2) <- matrix s2
 --   return (vs1 ++ vs2,SzPair tp1 tp2)
 matrix (SzQArr ixs n p) = do
-  ixs' <- sequence [uniqueVar | _ <- ixs]
+  ixs' <- sequence [ uniqueVar | _ <- ixs]
   let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
   return (ixs', SzArr (Ix.inst subst n) (Ix.inst subst p))
-
-returnTpe :: MonadUnique m => SizeType knd Ix.Term -> m (Type Ix.Term)
-returnTpe (SzBase bt ix) = return (SzBase bt ix)
-returnTpe (SzPair _ _) = return (SzPair undefined undefined)
-returnTpe (SzArr _ p) = returnTpe p
-returnTpe s@SzQArr{} = matrix s >>= returnTpe . snd
-
 
 returnIndex :: MonadUnique m => SizeType knd Ix.Term -> m Ix.Term
 returnIndex (SzBase _ ix) = return ix
@@ -271,14 +276,14 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
   annotateRhs cc (Let t1 vs t2) = Let (annotateRhs cc t1) vs (annotateRhs cc t2)  
 
 
-skolemTerm :: InferCG f v Ix.Term
-skolemTerm = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
+skolemVar :: InferCG f v Ix.Term
+skolemVar = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
 
 instantiate :: Schema Ix.Term -> InferCG f v (Type Ix.Term)
 instantiate (SzBase bt ix) = return (SzBase bt ix)
 -- instantiate (SzPair s1 s2) = SzPair <$> instantiate s1 <*> instantiate s2
 instantiate (SzQArr ixs n p) = do
-  s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemTerm | ix <- ixs]
+  s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemVar | ix <- ixs]
   return (SzArr (Ix.inst s n) (Ix.inst s p))
 
 subtypeOf :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v ()
@@ -286,14 +291,17 @@ t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t
 
 subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v ()
 SzBase bt1 ix1 `subtypeOf_` SzBase bt2 ix2
-  | bt1 == bt2 = record (ix2 :>=: ix1)
+  | bt1 == bt2 = require (ix2 :>=: ix1)
 SzArr n p `subtypeOf_` SzArr m q = do
   m `subtypeOf_` n
   p `subtypeOf_` q
 s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do 
-  (_,t1) <- matrix s1
-  t2 <- instantiate s2
-  t1 `subtypeOf_` t2
+  (vs,t1) <- matrix s1
+  (_, t2) <- matrix s2
+  t2' <- instantiate s2
+  notOccur vs `mapM` foldMap Ix.metaVars t1  
+  notOccur vs `mapM` foldMap Ix.metaVars t2
+  t1 `subtypeOf_` t2'
 SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
   t1 `subtypeOf_` t1'
   t2 `subtypeOf_` t2'  
@@ -337,62 +345,65 @@ inferSizeType ctx t@(Let t1 (x,y) t2) =
       return tp
     _ -> throwError (IlltypedTerm t1 "pair type" tp1)
 
-obligationToConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligation f v -> InferM f v [Constraint]
-obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars cs; return cs } where
-  check (ctx :- t ::: tp) = execInferCG $ do
-    tp' <- inferSizeType ctx t
-    tp' `subtypeOf` tp
-  instantiateMetaVars cs = do
-    let (Just solved) = SetSolver.solveSystem (fromConstraint `concatMap` cs)
-        mvars = rights (concatMap (\ (l :>=: r) -> vars l ++ vars r) cs)
-    forM_ mvars $ \ mv@(Ix.MetaVar v _) -> do
-      let (Just vs) = concatMap solutionToVars <$> SetSolver.leastSolution solved v
-      f <- uniqueSym 
-      Ix.substituteMetaVar mv (Ix.Fun f (Ix.fvar `map` vs))
+obligationToConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligation f v -> InferM f v SOCS
+obligationToConstraints o@(ctx :- t ::: tp) =  logBlk o $ execInferCG $ do 
+  tp' <- inferSizeType ctx t
+  tp' `subtypeOf` tp
 
-  fromConstraint  (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
-                              | (Right (Ix.MetaVar v _)) <- vars l, vr <- vars r]
+-- obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars cs; return cs } where
+--   check (ctx :- t ::: tp) = execInferCG $ do
+--     tp' <- inferSizeType ctx t
+--     tp' `subtypeOf` tp
+--   instantiateMetaVars cs = do
+--     let (Just solved) = SetSolver.solveSystem (fromConstraint `concatMap` cs)
+--         mvars = rights (concatMap (\ (l :>=: r) -> vars l ++ vars r) cs)
+--     forM_ mvars $ \ mv@(Ix.MetaVar v _) -> do
+--       let (Just vs) = oconcatMap solutionToVars <$> SetSolver.leastSolution solved v
+--       f <- uniqueSym 
+--       Ix.substituteMetaVar mv (Ix.Fun f (Ix.fvar `map` vs))
 
-  solutionToVars SetSolver.EmptySet = []
-  solutionToVars (SetSolver.ConstructedTerm c _ []) = [c]
-  solutionToVars a = error $ "solutionToVars: unexpected answer: " ++ show a
+--   fromConstraint  (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
+--                               | (Right (Ix.MetaVar v _)) <- vars l, vr <- vars r]
 
-  toExp (Left v) = SetSolver.atom v
-  toExp (Right (Ix.MetaVar v _)) = SetSolver.setVariable v
+--   solutionToVars SetSolver.EmptySet = []
+--   solutionToVars (SetSolver.ConstructedTerm c _ []) = [c]
+--   solutionToVars a = error $ "solutionToVars: unexpected answer: " ++ show a
+
+--   toExp (Left v) = SetSolver.atom v
+--   toExp (Right (Ix.MetaVar v _)) = SetSolver.setVariable v
       
-  vars Ix.Zero = []
-  vars (Ix.Succ ix) = vars ix
-  vars (Ix.Sum ixs) = concatMap vars ixs
-  vars (Ix.Fun _ ixs) = concatMap vars ixs
-  vars (Ix.Var (Ix.BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
-  vars (Ix.Var (Ix.FVar v)) = [Left v]
-  vars (Ix.MVar mv) = [Right mv]
+--   vars Ix.Zero = []
+--   vars (Ix.Succ ix) = vars ix
+--   vars (Ix.Sum ixs) = concatMap vars ixs
+--   vars (Ix.Fun _ ixs) = concatMap vars ixs
+--   vars (Ix.Var (Ix.BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
+--   vars (Ix.Var (Ix.FVar v)) = [Left v]
+--   vars (Ix.MVar mv) = [Right mv]
 
 
 
 generateConstraints :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => CSAbstract f -> Int -> Maybe [f] -> STAtrs f v
-                    -> IO (Either (SzTypingError f v) (Signature f Ix.Term, [Constraint])
-                          , [AnnotatedRule f v]
-                          , ExecutionLog)
+                    -> UniqueT IO (Either (SzTypingError f v) (Signature f Ix.Term, SOCS)
+                                  , [AnnotatedRule f v]
+                                  , ExecutionLog)
 generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ do
-    let rs = strlUntypedRule `map` statrsRules sttrs
-        ds = nub $ (headSymbol . lhs) `mapMaybe` rs
-        cs = nub (funs rs) \\ ds
-        fs = fromMaybe ds startSymbols ++ cs
-    sig <- abstractSignature (statrsSignature sttrs) abstr width fs ars
-    let css = [ (ctxSym ctx, s) | (ctx,s) <- signatureToList sig, ctxSym ctx `elem` cs ]
-
-    ocs <- logBlk "Orientation constraints" $ 
-      obligations abstr sig ars >>= concatMapM obligationToConstraints
-    ccs <- logBlk "Constructor constraints" $ execInferCG $ 
-      forM_ css $ \ (c,s) -> do
-        ix <- returnIndex s
-        record (ix :=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
-    return (sig,ocs ++ ccs)
+  sig <- abstractSignature (statrsSignature sttrs) abstr width fs ars
+    
+  ocs <- logBlk "Orientation constraints" $ 
+    obligations abstr sig ars >>= mapM obligationToConstraints
+  ccs <- logBlk "Constructor constraints" $ execInferCG $ 
+    forM_ (signatureToList sig) $ \ (ctx,s) -> 
+        when (ctxSym ctx `elem` cs) $ do
+           ix <- returnIndex s
+           require (ix :=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
+  return (sig, mconcat (ccs:ocs))
   where 
     withARS (s,cs) = (s,ars,cs)
     ars = withCallSites sttrs
-
+    atrs = toATRS sttrs
+    ds = nub $ (headSymbol . lhs) `mapMaybe` rules atrs
+    cs = nub (funs atrs) \\ ds
+    fs = fromMaybe ds startSymbols ++ cs
 -- pretty printers
 --------------------------------------------------------------------------------
 

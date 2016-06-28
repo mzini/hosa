@@ -18,11 +18,18 @@ data SizeType (knd :: Kind) ix where
   SzArr  :: Schema ix -> Type ix -> Type ix
   SzQArr :: [Ix.VarId] -> Schema ix -> Type ix -> Schema ix
 
+instance Foldable (SizeType knd) where
+  foldr f z (SzBase _ ix) = f ix z
+  foldr f z (SzPair t1 t2) = foldr f (foldr f z t2) t1
+  foldr f z (SzArr p n) = foldr f (foldr f z n) p
+  foldr f z (SzQArr _ p n) = foldr f (foldr f z n) p  
+
 type Type = SizeType 'T
 type Schema = SizeType 'S
 
 skeleton :: SizeType knd ix -> SimpleType
 skeleton (SzBase (BT i) _) = TyBase (BT i)
+skeleton (SzPair t1 t2) = skeleton t1 :*: skeleton t2
 skeleton (SzArr n p) = skeleton n :-> skeleton p
 skeleton (SzQArr _ n p) = skeleton n :-> skeleton p
 

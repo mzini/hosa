@@ -1,5 +1,6 @@
 module HoSA.Ticking
   (tickATRS
+  , ntickATRS
   , TSymbol
   , TVariable)
 where
@@ -93,7 +94,7 @@ auxFun (f ::: tp) i = Fun (TSymbol (symbolName f) i ::: auxType tp i) where
   auxType (tp1 :-> tp2) i = translateType tp1 :-> auxType tp2 (i - 1)
 
 constrSym :: Symbol ::: SimpleType -> TSymbol ::: SimpleType
-constrSym (f ::: tp) = TConstr (symbolName f) ::: translateType tp
+constrSym (f ::: tp) = TConstr (symbolName f) ::: tp
 
 constrFun :: Symbol ::: SimpleType -> TickedTerm
 constrFun f = Fun (constrSym f)
@@ -158,6 +159,9 @@ tickATRS statrs = STAtrs { statrsRules = rs
     ar = arity statrs
     rs = translateRule ar `map` statrsRules statrs
          ++ auxRules ar `concatMap` signatureToDecls (statrsSignature statrs)
+
+ntickATRS :: STAtrs Symbol Variable -> TickedAtrs
+ntickATRS statrs = undefined
          
 -- pretty printers
 instance PP.Pretty TSymbol where

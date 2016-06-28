@@ -15,6 +15,7 @@ module HoSA.Data.SimpleType
   , unType
   , tarity
   , inferSimpleType
+  , toATRS
   , TypingError (..))
 where
 
@@ -80,6 +81,8 @@ data STRule f v = STRule { strlEnv         :: Environment v
 data STAtrs f v = STAtrs { statrsRules :: [STRule f v]
                          , statrsSignature :: Signature f} 
 
+toATRS :: STAtrs f v -> ATRS f v
+toATRS = ATRS . (map strlUntypedRule . statrsRules)
 
 instance Eq v => TermLike (STRule f v) where
   type S (STRule f v) = (f ::: SimpleType)  

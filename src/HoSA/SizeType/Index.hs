@@ -7,6 +7,7 @@ module HoSA.SizeType.Index (
   , MetaVar (..)
   , fvar
   , bvar
+  , metaVars
   , ixZero
   , ixSucc
   , ixSum
@@ -17,6 +18,9 @@ module HoSA.SizeType.Index (
   , unsafePeakVar
   -- * Constraints
   , Constraint (..)
+  , lhs
+  , rhs
+  , DConstraint (..)
   -- * Substitutions on Index Terms
   , Substitutable (..)
   , Subst
@@ -55,7 +59,16 @@ data Constraint =
   Term :>=: Term
   | Term :=: Term
 
+data DConstraint = NOccur VarId MetaVar
+
 infixr 0 :>=:
+infixr 0 :=:
+
+lhs, rhs :: Constraint -> Term
+lhs (l :>=: _) = l
+lhs (l :=: _) = l
+rhs (_ :>=: r) = r
+rhs (_ :=: r) = r
 
 fvar :: VarId -> Term
 fvar = Var . FVar
@@ -103,6 +116,14 @@ fvars (Var (FVar v)) = [v]
 fvars (MVar mv) = either err fvars (unsafePeakVar mv) where
   err _ = error "HoSA.Index.fvars: free variables on terms with meta-variables cannot be determined"
 
+metaVars :: Term -> [MetaVar]
+metaVars Zero = []
+metaVars (Succ ix) = metaVars ix
+metaVars (Sum ixs) = concatMap metaVars ixs
+metaVars (Fun _ ixs) = concatMap metaVars ixs
+metaVars (Var (BVar _)) = []
+metaVars (Var (FVar v)) = []
+metaVars (MVar mv) = [mv]
 
 
 -- pretty printers
@@ -121,15 +142,18 @@ instance PP.Pretty Sym where
   pretty (Sym mn u) = PP.text n PP.<> PP.int (uniqueToInt u) where
     n = fromMaybe "f" mn
 
+instance PP.Pretty MetaVar where
+  pretty mv@(MetaVar v _) = PP.text "X" PP.<> PP.int (uniqueToInt v) PP.<> ppContent (unsafePeakVar mv) where
+    ppContent (Left _) = PP.empty 
+    ppContent (Right t) = PP.text "@" PP.<> PP.braces (PP.pretty t)
+
 instance PP.Pretty Term where
   pretty Zero = PP.text "0"
   pretty (Succ ix) = prettyFn "s" [ix]
   pretty (Sum ixs) = prettyFn "sum" ixs
   pretty (Fun sym as) = PP.pretty sym PP.<> prettyArgLst as
   pretty (Var v) = PP.pretty v
-  pretty (MVar mv@(MetaVar v _)) = PP.text "X" PP.<> PP.int (uniqueToInt v) PP.<> ppContent (unsafePeakVar mv) where
-    ppContent (Left _) = PP.empty 
-    ppContent (Right t) = PP.text "@" PP.<> PP.braces (PP.pretty t)
+  pretty (MVar mv) = PP.pretty mv
 
 instance PP.Pretty Constraint where
   pretty (ix1 :>=: ix2) = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text ">=" PP.</> PP.pretty ix2
