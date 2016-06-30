@@ -1,5 +1,6 @@
 module HoSA.SizeType.Infer where
 
+import           Control.Arrow ((|||))
 import           Control.Monad.Except
 import           Control.Monad.Trace
 import           Control.Monad.Writer
@@ -77,7 +78,7 @@ notOccur :: [Ix.VarId] -> Ix.MetaVar -> InferCG f v ()
 notOccur vs mv = do
   tell (SOCS [] [ Ix.NOccur v mv | v <- vs])
   logMsg (PP.text "〈"
-           PP.<+> PP.pretty vs
+           PP.<+> PP.pretty (Ix.FVar `map` vs)
            PP.<+> PP.text "notin" PP.<+> PP.pretty mv
            PP.<+> PP.text "〉")
 
@@ -300,8 +301,7 @@ s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do
   (_, t2) <- matrix s2
   t2' <- instantiate s2
   logBlk (PP.text "occurs check") $ do 
-    notOccur vs `mapM` foldMap Ix.metaVars t1  
-    notOccur vs `mapM` foldMap Ix.metaVars t2
+    notOccur vs `mapM` (metaVars t1 ++ metaVars t2)
   t1 `subtypeOf_` t2'
 SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
   t1 `subtypeOf_` t1'
@@ -328,7 +328,10 @@ inferSizeType ctx t@(Apply t1 t2) =
   tp1 <- inferSizeType ctx t1
   case tp1 of
     SzArr sArg tBdy -> do
-      (_,tArg) <- matrix sArg
+      (vs,tArg) <- matrix sArg
+      -- TODO: use different contexts
+      let ctxMetaVars = foldMap (metaVars ||| metaVars)
+      notOccur vs `mapM` ctxMetaVars [ tp | (v,tp) <- Map.toList ctx,  v `elem` fvarsDL t2 [] ]
       tp2 <- inferSizeType ctx t2
       tp2 `subtypeOf` tArg
       logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty tBdy)

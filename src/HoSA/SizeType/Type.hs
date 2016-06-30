@@ -51,13 +51,8 @@ fvars = nub . walk where
   walk (SzPair t1 t2) = walk t1 ++ walk t2
   walk (SzQArr _ n p) = walk n ++ walk p  
 
--- uncurryUpto :: Type ix -> Int -> Maybe ([Schema ix], Type ix)
--- uncurryUpto t 0 = Just ([],t)
--- uncurryUpto (SzArr n t) i
---   | i > 0 = do
---       (ns,t') <- uncurryUpto t (i - 1)
---       return (n:ns,t')
--- uncurryUpto _ _ = Nothing
+metaVars :: SizeType knd Ix.Term -> [Ix.MetaVar]
+metaVars = foldMap Ix.metaVars
 
 -- signature
 
