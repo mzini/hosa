@@ -335,3 +335,10 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypingError f v) where
     PP.text "Variable" PP.<+> PP.squotes (PP.pretty v) PP.<+> PP.text "undefined:"
     PP.<$> PP.indent 2 (PP.pretty rl)  
     
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (STRule f v) where
+  pretty STRule{..} =
+    PP.group (PP.pretty strlEnv)
+    PP.<+> PP.text "⊦"
+    PP.</> PP.group (PP.pretty strlUntypedRule
+                     PP.<+> PP.text ":"
+                     PP.</> PP.pretty strlType)

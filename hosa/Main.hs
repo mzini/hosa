@@ -8,7 +8,7 @@ import Data.Typeable (Typeable)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import Control.Monad.Except
 import Control.Monad.Reader
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import System.Exit
 
 import qualified Data.Map as M
@@ -63,9 +63,17 @@ constraintProcessor cfg =
     Simple -> try simplify ==> simple
     SCC -> try simplify ==> try (exhaustive (sccDecompose (try simplify ==> simple)))
   where
-    simple = try (smt' 0) ==> try (smt' 1) ==> try (smt' 2)
+    simple =
+      try (smt' defaultSMTOpts { degree = 1, maxCoeff = Just 1} )
+      ==> try (smt' defaultSMTOpts { degree = 1 })
+      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 1, maxConst = Just 1})
     smt' = smt (solver cfg)
-    simplify = exhaustive (propagateUp <=> propagateDown)
+    simplify =
+      try instantiate
+      ==> try propagateEq
+      ==> try (exhaustive (propagateUp
+                           <=> propagateDown))
+      ==> (\ cs -> logOpenConstraints cs >> return (Progress cs))
 
 data Error = ParseError ParseError
            | SimpleTypeError (ST.TypingError Symbol Variable)
@@ -105,17 +113,21 @@ solveConstraints asig cs = do
   putExecLog l
   assertJust ConstraintUnsolvable msig
 
+
+prettyRS :: (PP.Pretty r, PP.Pretty f) => [r] -> ST.Signature f -> PP.Doc
+prettyRS rs sig = 
+  PP.vcat [PP.pretty r | r <- rs]
+  PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty sig)
+
 runHosa :: IO (Either Error ())
 runHosa = do
   cfg <- cmdArgs defaultConfig
   runUniqueT $ flip runReaderT cfg $ runExceptT $ do
-    tick <- reader tickingFn
-    statrs <- tick <$> (readATRS >>= inferSimpleTypes)
-    -- status "ATRS" (PP.pretty (ST.strlUntypedRule `map` ST.statrsRules statrs))
-    -- status "Simple Type Signature" (PP.pretty (ST.statrsSignature statrs))
+    input <- readATRS >>= inferSimpleTypes
+    statrs <- reader tickingFn <*> return input
+    unless (unticked cfg) $ status "Unticked ATRS" (prettyRS (ST.strlUntypedRule `map` ST.statrsRules input) (ST.statrsSignature input))
     (asig,ars,cs) <- generateConstraints statrs
-    status "Considered ATRS" (PP.vcat [PP.pretty r | r <- ars]
-                           PP.<$$> PP.hang 2 (PP.text "where" PP.<$> PP.pretty (ST.statrsSignature statrs)))
+    status "Considered ATRS" (prettyRS ars (ST.statrsSignature statrs))
     sig <- solveConstraints asig cs
     status "Signature" sig
     return ()

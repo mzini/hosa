@@ -85,8 +85,4 @@ instance PP.Pretty f => PP.Pretty (CallCtx f) where
 --     toSym (CallSite (Symbol f ::: _) i) = Symbol (f ++ "@" ++ show i)
   
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (AnnotatedRule f v) where
-  pretty rl = PP.group (PP.pretty (arlEnv rl))
-    PP.<+> PP.text "⊢"
-    PP.</> PP.hang 2 (prettyRl (lhs (arlUntypedRule rl)) (arlAnnotatedRhs rl) PP.<+> PP.text ":" PP.<+> PP.pretty (arlType rl))
-    where
-      prettyRl l r = PP.pretty l PP.<+> PP.text "=" PP.</> PP.pretty r
+  pretty rl = PP.hang 2 (PP.pretty (lhs (arlUntypedRule rl)) PP.<+> PP.text "=" PP.</> PP.pretty (arlAnnotatedRhs rl))

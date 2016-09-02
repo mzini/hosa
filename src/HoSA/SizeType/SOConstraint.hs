@@ -44,12 +44,10 @@ vars Zero = []
 vars (Succ ix) = vars ix
 vars (Sum ixs) = concatMap vars ixs
 vars (Fun _ ixs) = concatMap vars ixs
-vars (Var (BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
+vars (Var (BVar _)) = error "HoSA.SOConstraint.vars: constraint contains bound variable"
 vars (Var (FVar v)) = [Left v]
 vars (MVar mv) = [Right mv]
 
-toExp (Left v) = SetSolver.atom v
-toExp (Right (MetaVar v _)) = SetSolver.setVariable v
 
 
 type SetConstraint = SetSolver.Inclusion Unique VarId
@@ -60,6 +58,8 @@ toSetConstraint = concatMap f where
   f (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
                 | (Right (MetaVar v _)) <- vars l, vr <- vars r]
   f (l :=: r) = f (l :>=: r) ++ f (r :>=: l)
+  toExp (Left v) = SetSolver.atom v
+  toExp (Right (MetaVar v _)) = SetSolver.setVariable v
   
 toFOCS :: (MonadUnique m, MonadIO m) => SOCS -> m FOCS
 toFOCS (SOCS cs ds) = do

@@ -205,10 +205,6 @@ abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do
 
 matrix :: MonadUnique m => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
 matrix (SzBase bt ix) = return ([],SzBase bt ix)
--- matrix (SzPair s1 s2) = do
---   (vs1,tp1) <- matrix s1
---   (vs2,tp2) <- matrix s2
---   return (vs1 ++ vs2,SzPair tp1 tp2)
 matrix (SzQArr ixs n p) = do
   ixs' <- sequence [ uniqueVar | _ <- ixs]
   let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
@@ -259,7 +255,6 @@ obligations abstr sig ars = step `concatMapM` signatureToList sig where
              , headSymbol l == Just (ctxSym cc)
              , alhs <- annotateLhss s l ]
 
-  -- TODO
   annotateLhss s (Fun f) = [Fun (f:::s)]
   annotateLhss s (Apply l1 l2) = Apply <$> annotateLhss s l1 <*> annotateArgs l2 where
     annotateArgs (Var v) = [Var v]
@@ -282,7 +277,6 @@ skolemVar = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
 
 instantiate :: Schema Ix.Term -> InferCG f v (Type Ix.Term)
 instantiate (SzBase bt ix) = return (SzBase bt ix)
--- instantiate (SzPair s1 s2) = SzPair <$> instantiate s1 <*> instantiate s2
 instantiate (SzQArr ixs n p) = do
   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemVar | ix <- ixs]
   return (SzArr (Ix.inst s n) (Ix.inst s p))
@@ -329,9 +323,7 @@ inferSizeType ctx t@(Apply t1 t2) =
   case tp1 of
     SzArr sArg tBdy -> do
       (vs,tArg) <- matrix sArg
-      -- TODO: use different contexts
-      let ctxMetaVars = foldMap (metaVars ||| metaVars)
-      notOccur vs `mapM` ctxMetaVars [ tp | (v,tp) <- Map.toList ctx,  v `elem` fvarsDL t2 [] ]
+      notOccur vs `mapM` concatMap metaVars (sArg : [ tp | (v, Right tp) <- Map.toList ctx,  v `elem` fvarsDL t2 [] ])
       tp2 <- inferSizeType ctx t2
       tp2 `subtypeOf` tArg
       logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty (unType t) PP.<+> PP.text ":" PP.<+> PP.pretty tBdy)
@@ -353,37 +345,6 @@ obligationToConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligatio
 obligationToConstraints o@(ctx :- t ::: tp) =  logBlk o $ execInferCG $ do 
   tp' <- inferSizeType ctx t
   tp' `subtypeOf` tp
-
--- obligationToConstraints o =  do { cs <- logBlk o (check o); instantiateMetaVars cs; return cs } where
---   check (ctx :- t ::: tp) = execInferCG $ do
---     tp' <- inferSizeType ctx t
---     tp' `subtypeOf` tp
---   instantiateMetaVars cs = do
---     let (Just solved) = SetSolver.solveSystem (fromConstraint `concatMap` cs)
---         mvars = rights (concatMap (\ (l :>=: r) -> vars l ++ vars r) cs)
---     forM_ mvars $ \ mv@(Ix.MetaVar v _) -> do
---       let (Just vs) = oconcatMap solutionToVars <$> SetSolver.leastSolution solved v
---       f <- uniqueSym 
---       Ix.substituteMetaVar mv (Ix.Fun f (Ix.fvar `map` vs))
-
---   fromConstraint  (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
---                               | (Right (Ix.MetaVar v _)) <- vars l, vr <- vars r]
-
---   solutionToVars SetSolver.EmptySet = []
---   solutionToVars (SetSolver.ConstructedTerm c _ []) = [c]
---   solutionToVars a = error $ "solutionToVars: unexpected answer: " ++ show a
-
---   toExp (Left v) = SetSolver.atom v
---   toExp (Right (Ix.MetaVar v _)) = SetSolver.setVariable v
-      
---   vars Ix.Zero = []
---   vars (Ix.Succ ix) = vars ix
---   vars (Ix.Sum ixs) = concatMap vars ixs
---   vars (Ix.Fun _ ixs) = concatMap vars ixs
---   vars (Ix.Var (Ix.BVar _)) = error "HoSA.Infer.checkObligation: constraint contains bound variable"
---   vars (Ix.Var (Ix.FVar v)) = [Left v]
---   vars (Ix.MVar mv) = [Right mv]
-
 
 
 generateConstraints :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => CSAbstract f -> Int -> Maybe [f] -> STAtrs f v
@@ -408,6 +369,7 @@ generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ 
     ds = nub $ (headSymbol . lhs) `mapMaybe` rules atrs
     cs = nub (funs atrs) \\ ds
     fs = fromMaybe ds startSymbols ++ cs
+
 -- pretty printers
 --------------------------------------------------------------------------------
 
