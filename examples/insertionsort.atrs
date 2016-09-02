@@ -1,0 +1,9 @@
+fold_right f Nil acc = acc;
+fold_right f (Cons x xs) acc = f x (fold_right f xs acc);
+
+insert cmp x Nil = Cons x Nil;
+insert cmp x (Cons y ys) = insert' cmp (cmp x y) x y ys;
+insert' cmp True x y ys = Cons x (Cons y ys);
+insert' cmp False x y ys = Cons y (insert cmp x ys);
+
+sort cmp = fold_right (insert cmp);

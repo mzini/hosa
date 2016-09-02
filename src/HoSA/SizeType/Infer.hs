@@ -18,9 +18,9 @@ import           HoSA.Data.Rewriting
 import           HoSA.Data.SimpleType hiding (unType, Signature)
 import           HoSA.Data.CallSite hiding (lhs, rhs)
 import qualified HoSA.Data.CallSite as C
-import           HoSA.SizeType.Index (Constraint(..))
-import qualified HoSA.SizeType.Index as Ix
-import           HoSA.SizeType.Type
+import           HoSA.Data.Index (Constraint(..))
+import qualified HoSA.Data.Index as Ix
+import           HoSA.Data.SizeType
 import           HoSA.SizeType.SOConstraint (SOCS (..))
 
 

@@ -17,10 +17,10 @@ import           HoSA.Ticking
 import           HoSA.Data.Rewriting
 import qualified HoSA.Data.CallSite as C
 import qualified HoSA.SizeType.Infer as I
-import qualified HoSA.SizeType.Index as Ix
+import qualified HoSA.Data.Index as Ix
 import qualified HoSA.Data.SimpleType as ST
 import qualified HoSA.SizeType.SOConstraint as SOCS
-import qualified HoSA.SizeType.Type as SzT
+import qualified HoSA.Data.SizeType as SzT
 import GUBS hiding (Symbol, Variable, Var)
 
 deriving instance Typeable (SMTSolver)

@@ -1,4 +1,4 @@
-module HoSA.SizeType.Index (
+module HoSA.Data.Index (
   -- * Index Terms
   Term (..)
   , Var (..)

@@ -12,8 +12,8 @@ import qualified Constraints.Set.Solver as SetSolver
 
 import qualified GUBS
 
-import           HoSA.SizeType.Index
-import           HoSA.SizeType.Type
+import           HoSA.Data.Index
+import           HoSA.Data.SizeType
 import           HoSA.Utils
 
 

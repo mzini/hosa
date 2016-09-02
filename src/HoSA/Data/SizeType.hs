@@ -1,4 +1,4 @@
-module HoSA.SizeType.Type where
+module HoSA.Data.SizeType where
 
 import           Data.List (nub)
 import qualified Data.Map as Map
@@ -8,7 +8,7 @@ import           HoSA.Utils
 import           HoSA.Data.Rewriting
 import           HoSA.Data.SimpleType hiding (Signature)
 import           HoSA.Data.CallSite
-import qualified HoSA.SizeType.Index as Ix
+import qualified HoSA.Data.Index as Ix
 
 data Kind = T | S
 

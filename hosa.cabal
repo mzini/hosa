@@ -15,8 +15,8 @@ library
                        HoSA.Data.Rewriting
                        HoSA.Data.SimpleType
                        HoSA.Data.CallSite
-                       HoSA.SizeType.Type                  
-                       HoSA.SizeType.Index
+                       HoSA.Data.SizeType                  
+                       HoSA.Data.Index
                        HoSA.SizeType.Infer
                        HoSA.SizeType.SOConstraint
   other-extensions:    
