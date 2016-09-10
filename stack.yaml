@@ -9,7 +9,7 @@ packages:
     commit: 9aee6ddfa4b8ba39246178d1c901b6d7f89dc89e
 extra-deps:
 - ifscs-0.2.0.0
-- smtlib2-0.3
+- smtlib2-0.3.1
 - union-find-array-0.1.0.2
 - multiset-0.2.2
 - atto-lisp-0.2.2.2

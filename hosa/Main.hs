@@ -60,20 +60,20 @@ tickingFn cfg | unticked cfg = ntickATRS
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
-    Simple -> try simplify ==> simple
-    SCC -> try simplify ==> try (exhaustive (sccDecompose (try simplify ==> simple)))
+    Simple -> logCS ==> try simplify ==> logCS ==> simple
+    SCC -> logCS ==> try simplify ==> logCS ==> try (exhaustive (sccDecompose (try simplify ==> simple)))
   where
+    logCS cs = logOpenConstraints cs >> return (Progress cs)
     simple =
       try (smt' defaultSMTOpts { degree = 1, maxCoeff = Just 1} )
       ==> try (smt' defaultSMTOpts { degree = 1 })
-      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 1, maxConst = Just 1})
+      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 1})
+      ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Just 2})      
     smt' = smt (solver cfg)
     simplify =
       try instantiate
       ==> try propagateEq
-      ==> try (exhaustive (propagateUp
-                           <=> propagateDown))
-      ==> (\ cs -> logOpenConstraints cs >> return (Progress cs))
+      ==> try (exhaustive (propagateUp <=> propagateDown))
 
 data Error = ParseError ParseError
            | SimpleTypeError (ST.TypingError Symbol Variable)
