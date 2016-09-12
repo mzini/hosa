@@ -69,4 +69,5 @@ executable hosa
                      FlexibleContexts,
                      TypeSynonymInstances,
                      FlexibleInstances,
+                     ViewPatterns,                     
                      StandaloneDeriving

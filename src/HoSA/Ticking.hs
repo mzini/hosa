@@ -1,7 +1,7 @@
 module HoSA.Ticking
   (tickATRS
   , ntickATRS
-  , TSymbol
+  , TSymbol (..)
   , TVariable
   , TickedAtrs)
 where

@@ -27,36 +27,47 @@ deriving instance Typeable (SMTSolver)
 deriving instance Data (SMTSolver)
 
 data SMTStrategy = Simple | SCC deriving (Show, Data, Typeable)
+data AnalysisType = Time | Size deriving (Show, Data, Typeable)
 
 data HoSA = HoSA { width :: Int
                  , clength :: Int
                  , solver :: SMTSolver
                  , verbose :: Bool
-                 , mainIs :: Maybe [String]
+                 , mains :: Maybe [String]
+                 -- , properSized :: Maybe [String]
                  , smtStrategy :: SMTStrategy
-                 , unticked :: Bool
+                 , analyse :: AnalysisType
                  , input :: FilePath}
           deriving (Show, Data, Typeable)
 
 defaultConfig :: HoSA
 defaultConfig =
-  HoSA { width = 1 &= help "width, i.e. number of extra variables, of size-types"
+  HoSA { width = 1 &= help "Sized-types width, i.e. number of extra variables"
        , input = def &= typFile &= argPos 0
-       , solver = MiniSmt &= help "SMT solver (minismt, z3)"
-       , mainIs = Nothing &= help "Main function to analyse"
+       , solver = Z3 &= help "SMT solver (minismt, z3)."
+       , mains = Nothing &= help "List of analysed main functions."
+       -- , properSized  = Nothing &= help "Constructors with proper size annotation (defaults to all constructors)"
        , verbose = False
-       , unticked = False
-       , smtStrategy = Simple  &= help "SMT solver (simple, SCC)"
-       , clength = 0 &= help "length of call-site contexts" }
+       , analyse = Size &= help "Analysis objective (size, time)."
+       , smtStrategy = Simple  &= help "Constraint solving strategy (Simple, SCC)."
+       , clength = 0 &= help "Length of call-site contexts." }
   &= help "Infer size-types for given ATRS"
 
 abstraction :: HoSA -> C.CSAbstract f
 abstraction cfg = C.kca (clength cfg)
 
 tickingFn :: HoSA -> ST.STAtrs Symbol Variable -> ST.STAtrs TSymbol TVariable
-tickingFn cfg | unticked cfg = ntickATRS
-              | otherwise = tickATRS
-              
+tickingFn (analyse -> Size) = ntickATRS
+tickingFn (analyse -> Time) = tickATRS
+
+timeAnalysis :: HoSA -> Bool
+timeAnalysis (analyse -> Time) = True
+timeAnalysis _ = False
+
+sizedConstructors :: HoSA -> Maybe [TSymbol]
+sizedConstructors (analyse -> Time) = Just [Tick]
+sizedConstructors cfg = Nothing -- fmap (map TConstr) (properSized cfg)
+                              
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
@@ -101,8 +112,9 @@ generateConstraints :: ST.STAtrs TSymbol TVariable -> RunM (SzT.Signature TSymbo
 generateConstraints stars = do 
   abstr <- reader abstraction
   w <- reader width
-  ms <- return Nothing -- TODO fmap (map Symbol) <$> reader mainIs
-  (res,ars,l) <- lift (lift (I.generateConstraints abstr w ms stars))
+  cs <- reader sizedConstructors
+  -- timed <- not <$> reader unticked -- return Nothing -- TODO fmap (map Symbol) <$> reader mainIs
+  (res,ars,l) <- lift (lift (I.generateConstraints abstr w Nothing cs stars))
   putExecLog l
   (\(s,c) -> (s,ars,c)) <$> assertRight SizeTypeError res
 
@@ -125,7 +137,7 @@ runHosa = do
   runUniqueT $ flip runReaderT cfg $ runExceptT $ do
     input <- readATRS >>= inferSimpleTypes
     statrs <- reader tickingFn <*> return input
-    unless (unticked cfg) $ status "Unticked ATRS" (prettyRS (ST.strlUntypedRule `map` ST.statrsRules input) (ST.statrsSignature input))
+    when (timeAnalysis cfg) $ status "Unticked ATRS" (prettyRS (ST.strlUntypedRule `map` ST.statrsRules input) (ST.statrsSignature input))
     (asig,ars,cs) <- generateConstraints statrs
     status "Considered ATRS" (prettyRS ars (ST.statrsSignature statrs))
     sig <- solveConstraints asig cs

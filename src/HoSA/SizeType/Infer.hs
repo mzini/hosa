@@ -359,18 +359,18 @@ obligationToConstraints o@(ctx :- t ::: tp) =  logBlk o $ execInferCG $ do
   tp' `subtypeOf` tp
 
 
-generateConstraints :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => CSAbstract f -> Int -> Maybe [f] -> STAtrs f v
+generateConstraints :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => CSAbstract f -> Int -> Maybe [f] -> Maybe [f] -> STAtrs f v
                     -> UniqueT IO (Either (SzTypingError f v) (Signature f Ix.Term, SOCS)
                                   , [AnnotatedRule f v]
                                   , ExecutionLog)
-generateConstraints abstr width startSymbols sttrs = fmap withARS $ runInferM $ do
+generateConstraints abstr width startSymbols constrainedConstructors sttrs = fmap withARS $ runInferM $ do
   sig <- abstractSignature (statrsSignature sttrs) abstr width fs ars
     
   ocs <- logBlk "Orientation constraints" $ 
     obligations abstr sig ars >>= mapM obligationToConstraints
   ccs <- logBlk "Constructor constraints" $ execInferCG $ 
     forM_ (signatureToList sig) $ \ (ctx,s) -> 
-        when (ctxSym ctx `elem` cs) $ do
+        when (ctxSym ctx `elem` fromMaybe cs constrainedConstructors) $ do
            ix <- returnIndex s
            require (ix :=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
   return (sig, mconcat (ccs:ocs))
