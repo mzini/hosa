@@ -47,7 +47,7 @@ library
                        ViewPatterns,
                        DataKinds,
                        TypeFamilies,
-                       TupleSections,
+                       TupleSections, 
                        TypeOperators,
                        PatternSynonyms,
                        DeriveDataTypeable,                       
@@ -71,4 +71,5 @@ executable hosa
                      FlexibleInstances,
                      ViewPatterns,                     
                      StandaloneDeriving,
+                     TupleSections,                      
                      GADTs                     

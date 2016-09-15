@@ -87,9 +87,6 @@ require cs = do
 -- variable supply and logging
 --------------------------------------------------------------------------------
 
-uniqueSym :: MonadUnique m => m Ix.Sym
-uniqueSym = Ix.Sym Nothing <$> unique
-
 uniqueVar :: MonadUnique m => m Ix.VarId
 uniqueVar = uniqueToInt <$> unique
 
@@ -123,78 +120,6 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (SzTypingError f v) where
        PP.</> PP.text "but expecting" PP.<+> PP.squotes (PP.text s) PP.<> PP.text ".")
   pretty (DeclarationMissing f) =
     PP.text "Type-declaration of symbol" PP.<+> PP.squotes (PP.pretty f) PP.<+> PP.text "missing."
-
--- abstract signature
---------------------------------------------------------------------------------
-
-
-abstractSchema :: MonadUnique m => Int -> SimpleType -> m (Schema Ix.Term)
-abstractSchema width = runUniqueT . annotate
-  where
-    freshVarIds n = map uniqueToInt <$> uniques n
-
-    empty = (Set.empty,Set.empty)
-    
-    toList (s1,s2) = Set.toList s1 ++ Set.toList s2
-    
-    (s1,s2) `union` (t1,t2) = (s1 `Set.union` t1, s2 `Set.union` t2)
-    
-    (s1,s2) \\ (t1,t2) = (s1 Set.\\ t1, s2 Set.\\ t2)
-
-    add Clock vs (vsb,vsc) = (vsb, Set.fromList vs `Set.union` vsc)
-    add BT{}  vs (vsb,vsc) = (Set.fromList vs `Set.union` vsb, vsc)
-    
-    select Clock (vsb,vsc) = vsb `Set.union` vsc
-    select BT{}  (vsb,_) = vsb
-
-
-    annotateBaseTerm vs bt = SzBase bt <$> ixTerm where
-      ixTerm = Ix.Fun <$> lift uniqueSym <*> return (Ix.bvar `map` ixVars)
-      ixVars = Set.toList (select bt vs)
-
-    annotate tp = close <$> annotateToplevel empty tp
-      where
-        close :: ((Set.Set Ix.VarId,Set.Set Ix.VarId), Type Ix.Term) -> Schema Ix.Term
-        close (_, SzBase bt ix) = SzBase bt ix
-        close (vs, SzArr n p) = SzQArr (toList vs) n p
-    
-    -- returns: free variables (normal, settype), type
-    annotateToplevel vs (TyBase bt) =
-      (empty,) <$> annotateBaseTerm vs bt
-    annotateToplevel vs (tp1 :*: tp2) = do
-      (fvs1, t1) <- annotateToplevel vs tp1
-      (fvs2, t2) <- annotateToplevel vs tp2
-      return (fvs1 `union` fvs2, SzPair t1 t2)
-    annotateToplevel vs (n :-> p) = do
-      (fvsn, n') <- annotateSchema vs n
-      (fvsp, p') <- annotateToplevel (fvsn `union` vs) p
-      return (fvsn `union` fvsp, SzArr n' p')
-
-    -- returns: free variables, schema
-    annotateSchema _ (TyBase bt) = do
-      [i] <- freshVarIds 1
-      return (add bt [i] empty, SzBase bt (Ix.bvar i))
-    annotateSchema vs (n :-> p) = do
-      (nvs, pvs, SzArr n' p') <- annotateArr vs n p
-      return (pvs \\ nvs, SzQArr (toList nvs) n' p')
-    
-    -- returns: negative free variables, positive free variables, type
-    annotateType vs (TyBase bt) = do
-      is <- freshVarIds width
-      let vs' = add bt is vs
-      (empty, vs',) <$> annotateBaseTerm vs' bt
-    annotateType vs (tp1 :*: tp2) = do
-      (fvsn1, fvsp1, t1) <- annotateType vs tp1
-      (fvsn2, fvsp2, t2) <- annotateType vs tp2
-      return (fvsn1 `union` fvsn2, fvsp1 `union` fvsp2, SzPair t1 t2)
-    annotateType vs (n :-> p) = annotateArr vs n p
-
-    -- returns: negative free variables, positive free variables, type
-    annotateArr vs n p = do
-      (fvsn, n') <- annotateSchema vs n
-      (nvsp, pvsp, p') <- annotateType (fvsn `union` vs) p
-      return (fvsn `union` nvsp, pvsp, SzArr n' p')        
-
 
   
 -- abstractSignature :: (Eq v, Ord f, PP.Pretty f) =>
