@@ -1,64 +1,57 @@
 module HoSA.Ticking
-  (tickATRS
-  , ntickATRS
+  ( tickProgram
+  -- , ntickATRS
   , TSymbol (..)
+  , arity
+  , translatedType
+  , constrType
+  , auxType
   , TVariable
-  , TickedAtrs)
+  , TickedExpression
+  , TickedEquation
+  , TickedProgram)
 where
 
+import Control.Monad.Trans (lift)
+import Control.Monad.Writer
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import qualified Data.Map as M
-import qualified Data.Set as S
+import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 
-import HoSA.Data.Rewriting
-import HoSA.Data.SimpleType
+import HoSA.Data.Expression
+import HoSA.Data.SimplyTypedProgram
 import HoSA.Utils
 
-data TSymbol = TSymbol String Int -- auxiliary symbols f_i
-             | TConstr String -- constructors
+data TSymbol f = TSymbol f Int -- auxiliary symbols f_i
+             | TConstr f -- constructors
              | Tick -- tick constructor 
   deriving (Eq, Ord)
 
-data TVariable = IdentV Variable
+instance IsSymbol f => IsSymbol (TSymbol f) where
+  isDefined TSymbol{} = True
+  isDefined _ = False
+  
+data TVariable v = IdentV v
                | Fresh Int
   deriving (Eq, Ord)
 
-type TickedTerm = STTerm TSymbol TVariable
-type TickedRule = STRule TSymbol TVariable
-type TickedAtrs = STAtrs TSymbol TVariable
+type TickedExpression f v = TypedExpression (TSymbol f) (TVariable v)
+type TickedEquation f v = TypedEquation (TSymbol f) (TVariable v)
+type TickedProgram f v = TypedProgram (TSymbol f) (TVariable v)
 
--- TODO: simplify? inlining, lets...
--- -- substCapturing :: (v -> Term f v) -> Term f v -> Term f v
--- -- substCapturing s (Var v) = s v
--- -- substCapturing _ (Fun f) = Fun f
--- -- substCapturing s (Apply e1 e2) = Apply (substCapturing s e1) (substCapturing s e2)
--- -- substCapturing s (Pair e1 e2) = Pair (substCapturing s e1) (substCapturing s e2)
--- -- substCapturing s (Let e1 vs e2) = Let (substCapturing s e1) vs (substCapturing s e2)
+type ArityDecl f = f -> Int
 
--- lett :: Eq v => TTerm f v -> (TVariable v, TVariable v) -> TTerm f v -> TTerm f v
--- lett (Pair e1 e2) (v1,v2) e
---   | inline e1 e && inline e2 e = substCapturing s e where
---       inline Fun {} _ = True
---       inline Var {} _ = True
---       s v | v == v1 = e1
---           | v == v2 = e2
---           | otherwise = Var v
--- lett e1 vs e2 = Let e1 vs e2
-
-type ArityDecl = Symbol -> Int
-
-arity :: STAtrs Symbol Variable -> ArityDecl
-arity statrs = \ f -> arities M.! f where
+arity :: (Eq f, IsSymbol f, Ord f) => TypedProgram f v -> ArityDecl f
+arity p = \ f -> arities Map.! f where
   
-  arities = M.fromList [ (f, ar f tp) | (f ::: tp) <- signatureToDecls (statrsSignature statrs) ]
+  arities = Map.mapWithKey ar (signature p)
   
-  ar Constr{} tp = tarity tp -- ar c = n where c ::: t1 -> ... -> tn -> B
-  ar f@Defined{} _ = darity f -- maximal arity in lhs
-    
+  ar f tp | isConstructor f = tarity tp
+          | otherwise = darity f
+          
   darity f = maximum $ 0 : [ length args
-                           | rl <- statrsRules statrs
-                           , let (Fun g, args) = sexpr (lhs (strlUntypedRule rl))
+                           | eq <- equations p
+                           , let (Fun g _ _, args) = sexpr (lhs (eqEqn eq))
                            , f == g ]
              
 ----------------------------------------------------------------------
@@ -68,124 +61,147 @@ arity statrs = \ f -> arities M.! f where
 clockType :: SimpleType
 clockType = TyBase Clock
 
-tick :: TickedTerm -> TickedTerm
-tick t = Fun (Tick ::: clockType :-> clockType) `Apply` t
+tick :: TickedExpression f v -> TickedExpression f v
+tick t = Fun Tick (clockType :-> clockType) 0 `Apply` t
 
 -- ticking monad
-type TickM a = UniqueM a
+type TickM f a = WriterT [(TSymbol f,SimpleType)] (UniqueT UniqueM) a
 
-freshVar :: SimpleType -> TickM (TVariable ::: SimpleType)
-freshVar tp = do
-  v <- Fresh . uniqueToInt <$> unique
-  return (v ::: tp)
+runTick :: TickM f a -> (a, [(TSymbol f,SimpleType)])
+runTick = runUnique . runUniqueT . runWriterT
+
+freshLoc :: TickM f Location
+freshLoc = uniqueToInt <$> lift unique
 
 -- types
-translateType :: SimpleType -> SimpleType
-translateType (TyBase b) = TyBase b
-translateType (t1 :*: t2) = translateType t1 :*: translateType t2
-translateType (t1 :-> t2) = translateType t1 :-> clockType :-> (translateType t2 :*: clockType)
+translatedType :: SimpleType -> SimpleType
+translatedType (TyBase b) = TyBase b
+translatedType (t1 :*: t2) = translatedType t1 :*: translatedType t2
+translatedType (t1 :-> t2) = translatedType t1 :-> clockType :-> (translatedType t2 :*: clockType)
 
--- symbols
-var :: (Variable ::: SimpleType) -> (TVariable ::: SimpleType)
-var (v ::: tp) = IdentV v ::: translateType tp
+auxType :: SimpleType -> Int -> SimpleType
+auxType tp 0 = clockType :-> (translatedType tp :*: clockType)
+auxType (tp1 :-> tp2) i = translatedType tp1 :-> auxType tp2 (i - 1)
 
-auxFun :: (Symbol ::: SimpleType) -> Int -> TickedTerm
-auxFun (f ::: tp) i = Fun (TSymbol (symbolName f) i ::: auxType tp i) where
-  auxType tp 0 = clockType :-> (translateType tp :*: clockType)
-  auxType (tp1 :-> tp2) i = translateType tp1 :-> auxType tp2 (i - 1)
+constrType :: SimpleType -> SimpleType 
+constrType (t1 :-> t2) = translatedType t1 :-> constrType t2
+constrType (TyBase b) = TyBase b
 
-constrSym :: Symbol ::: SimpleType -> TSymbol ::: SimpleType
-constrSym (f ::: tp) = TConstr (symbolName f) ::: tp
+-- symbols and variables
 
-constrFun :: Symbol ::: SimpleType -> TickedTerm
-constrFun f = Fun (constrSym f)
+freshVar :: TickM f (TVariable v)
+freshVar = Fresh <$> uniqueToInt <$> unique
+
+var :: v -> TVariable v
+var = IdentV
+
+resetFreshVar :: TickM f ()
+resetFreshVar = reset
+
+
+auxFun :: f -> SimpleType -> Int -> TickM f (TickedExpression f v)
+auxFun f tp i = tell [(f',tp')] >> (Fun f' tp' <$> freshLoc)
+  where
+    tp' = auxType tp i
+    f' = TSymbol f i    
+
+constrSym :: f -> SimpleType -> TickM f (TSymbol f, SimpleType)
+constrSym f tp = tell [(f',tp')] >> return (f',tp')
+  where
+    tp' = constrType tp
+    f'  = TConstr f
+
+constrFun :: f -> SimpleType -> TickM f (TickedExpression f v)
+constrFun f tp = do
+  (f',tp') <- constrSym f tp
+  Fun f' tp' <$> freshLoc
 
 -- rules
-translateLhs :: ArityDecl -> STTerm Symbol Variable -> TickedTerm -> TickM TickedTerm
-translateLhs ar l t =  return (renameHead l `Apply` t) where
-  renameHead (sexpr -> (Fun f,rest)) = fromSexpr hd' rest' where
-    hd' = auxFun f (length rest)
-    rest' = tmap constrSym var `map` rest
+translateLhs :: ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateLhs ar l t =  Apply <$> renameHead l <*> return t where
+  renameHead (sexpr -> (Fun f tpf _,rest)) = fromSexpr <$> hd' <*> rest' where
+    hd' = auxFun f tpf (length rest)
+    rest' = mapExpressionM (\ f tp _ -> constrSym f tp) (\ v tp -> pure (var v,tp)) `mapM` rest
 
-translateRhs :: ArityDecl -> STTerm Symbol Variable -> TickedTerm -> TickM TickedTerm
+translateRhs :: IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateRhs ar e t = translateK e t (\ e' t' -> return (e' `Pair` tick t')) where
-  translateK (Var v) t k = k (Var (var v)) t
-  translateK (Fun f@(c@Constr{} ::: _)) t k | ar c == 0 = k (constrFun f) t
-  translateK (Fun f) t k = k (auxFun f 1) t
+  translateK (Var v tp) t k = k (Var (var v) tp) t
+  translateK (Fun f tp _) t k | isConstructor f && ar f == 0 = constrFun f tp >>= flip k t
+  translateK (Fun f tp _) t k = auxFun f tp 1 >>= flip k t
   translateK (Apply e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
     k2 e1' e2' t2 = do
       let (tp1 :-> tp2) = typeOf e1
-      e <- freshVar (translateType tp2)
-      te <- freshVar clockType
-      Let (Apply (Apply e1' e2') t2) (e,te) <$> k (Var e) (Var te)
+      ve <- freshVar
+      vc <- freshVar
+      let te = translatedType tp2
+      LetP (Apply (Apply e1' e2') t2) ((ve,te),(vc,clockType)) <$> k (Var ve te) (Var vc clockType)
 
-translateEnv :: TVariable -> Environment Variable -> Environment TVariable
-translateEnv t env = M.insert t clockType $ M.fromList [ (IdentV w, translateType tp) | (w, tp) <- M.toList env ]
+translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
+translateEnv t env = Map.insert t clockType $ Map.fromList [ (IdentV w, translatedType tp) | (w, tp) <- Map.toList env ]
 
-translateRule :: ArityDecl -> STRule Symbol Variable -> TickedRule
-translateRule ar STRule {..} = runUnique $ do
-  t@(v:::_) <- freshVar clockType
-  let Rule l r = strlTypedRule
-  l' <- translateLhs ar l (Var t)
-  r' <- translateRhs ar r (Var t)
-  return STRule { strlEnv = translateEnv v strlEnv
-                , strlUntypedRule = Rule (unType l') (unType r')
-                , strlTypedRule = Rule l' r'
-                , strlType = translateType strlType :*: clockType}
+translateEquation :: (Ord v, IsSymbol f) => ArityDecl f -> TypedEquation f v -> TickM f (TickedEquation f v)
+translateEquation ar TypedEquation {..} = do
+  resetFreshVar
+  t <- freshVar
+  l' <- translateLhs ar (lhs eqEqn) (Var t clockType)
+  r' <- translateRhs ar (rhs eqEqn) (Var t clockType)
+  return TypedEquation { eqEnv = translateEnv t eqEnv
+                       , eqEqn = Equation l' r'
+                       , eqTpe = translatedType eqTpe :*: clockType}
 
-auxRules :: ArityDecl -> (Symbol ::: SimpleType) -> [TickedRule]
-auxRules ar (f ::: tpf) = [ auxRule tpf i | i <- [1 .. if definedP f then arf - 1 else arf]] where
-  arf = ar f
-  vars = walk 1 tpf where
-    walk i (tp1 :-> tp2) = (Fresh i ::: translateType tp1) : walk (i+1) tp2
+auxiliaryEquations :: (IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
+                                                                          
+auxiliaryEquations ar (f,tpf) = mapM (auxEquation tpf) [1 .. if isDefined f then arf - 1 else arf] where
+    arf = ar f
+    vars = walk 1 tpf where
+    walk i (tp1 :-> tp2) = (Var (Fresh i) (translatedType tp1)) : walk (i+1) tp2
     walk _ _ = []
 
-  auxRule tp i = STRule { strlEnv = envFromDecls (vs ++ [t])
-                        , strlUntypedRule = Rule (unType l) (unType r)
-                        , strlTypedRule = Rule l r
-                        , strlType = typeOf l }
-    where
-      vs = take i vars
-      t = Fresh (i+1) ::: clockType
-      l = fromSexpr (auxFun (f ::: tpf) i) [Var vi | vi <- vs ++ [t]]
-      r = fromSexpr hd [Var vi | vi <- vs] `Pair` Var t where
-        hd | i < arf = auxFun (f ::: tpf) (i + 1)
-           | otherwise = constrFun (f ::: tpf)
-  
-tickATRS :: STAtrs Symbol Variable -> TickedAtrs
-tickATRS statrs = STAtrs { statrsRules = rs
-                         , statrsSignature = signatureFromDecls (funs rs) }
-  where
-    ar = arity statrs
-    rs = translateRule ar `map` statrsRules statrs
-         ++ auxRules ar `concatMap` signatureToDecls (statrsSignature statrs)
+    auxEquation tp i = do
+      fi <- auxFun f tpf i
+      fi' <- if i < arf then auxFun f tpf (i + 1) else constrFun f tpf
+      let t = Var (Fresh (i+1)) clockType
+          vs = take i vars
+          l = fromSexpr fi (vs ++ [t])
+          r = fromSexpr fi' vs `Pair` t
+      return TypedEquation { eqEnv = Map.fromList [ (v,tp) | Var v tp <- t : vs ]
+                           , eqEqn = Equation l r 
+                           , eqTpe = typeOf l }
 
-ntickATRS :: STAtrs Symbol Variable -> TickedAtrs
-ntickATRS statrs = STAtrs { statrsRules = rs
-                          , statrsSignature = signatureFromDecls (funs rs) }
+tickProgram :: (Ord v, IsSymbol f, Ord f) => TypedProgram f v -> (TickedProgram f v, TickedProgram f v)
+tickProgram p = ( TypedProgram { equations = eqs, signature = Map.fromList fs }
+                , TypedProgram { equations = aeqs, signature = Map.fromList afs })
   where
-    rs = liftSTRule `map` statrsRules statrs
-    liftSTRule STRule { .. } = STRule { strlEnv = M.mapKeys IdentV strlEnv
-                                      , strlUntypedRule = liftRule liftUTTerm strlUntypedRule
-                                      , strlTypedRule = liftRule liftTTerm strlTypedRule
-                                      , strlType = strlType}
+    (eqs,fs) = runTick $ translateEquation (arity p) `mapM` equations p
+    (aeqs,afs) = runTick $ auxiliaryEquations (arity p) `concatMapM` (Map.toList (signature p))
+         -- ++ auxEquations ar `concatMap` signatureToDecls (statrsSignature statrs)
 
-    liftRule f (Rule l r) = Rule (f l) (f r)
-    liftTTerm = tmap (\ (f ::: tp) -> liftFun f ::: tp) (\ (v ::: tp) -> IdentV v ::: tp)
-    liftUTTerm = tmap liftFun IdentV
-    liftFun (Defined f) = TSymbol f 0
-    liftFun (Constr f) = TConstr f
+-- ntickATRS :: STAtrs Symbol Variable -> TickedAtrs
+-- ntickATRS statrs = STAtrs { statrsEquations = rs
+--                           , statrsSignature = signatureFromDecls (funs rs) }
+--   where
+--     rs = liftSTEquation `map` statrsEquations statrs
+--     liftSTEquation STEquation { .. } = STEquation { strlEnv = Map.mapKeys IdentV strlEnv
+--                                       , strlUntypedEquation = liftEquation liftUTExpression strlUntypedEquation
+--                                       , strlTypedEquation = liftEquation liftTExpression strlTypedEquation
+--                                       , strlType = strlType}
+
+--     liftEquation f (Equation l r) = Equation (f l) (f r)
+--     liftTExpression = tmap (\ (f ::: tp) -> liftFun f ::: tp) (\ (v ::: tp) -> IdentV v ::: tp)
+--     liftUTExpression = tmap liftFun IdentV
+--     liftFun f@Defined{} = TSymbol f 0
+--     liftFun f@Constr{} = TConstr f
       
                    
          
 -- pretty printers
-instance PP.Pretty TSymbol where
-  pretty (TSymbol f 0) = PP.pretty (Defined f)
-  pretty (TSymbol f i) = PP.pretty (Defined (f ++ "#" ++ show i))
-  pretty (TConstr n) = PP.pretty (Constr n)
+instance PP.Pretty f => PP.Pretty (TSymbol f) where
+  pretty (TSymbol f 0) = PP.bold (PP.pretty f)
+  pretty (TSymbol f i) = PP.bold (PP.pretty f) PP.<> PP.text "#" PP.<> PP.int i
+  pretty (TConstr c) = PP.pretty c
   pretty Tick = PP.text "T"
   
-instance PP.Pretty TVariable where
+instance PP.Pretty v => PP.Pretty (TVariable v) where
   pretty (IdentV v) = PP.pretty v
   pretty (Fresh u) = PP.text "v" PP.<> PP.int u

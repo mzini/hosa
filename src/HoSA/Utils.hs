@@ -86,7 +86,9 @@ demand :: Monad m => UniqueT m Unique
 demand = getU <* modifyU (\ (Unique i) -> Unique (i+1)) where
   getU = UniqueT get
   modifyU = UniqueT . modify
-  
+
+resetUnique :: Monad m => UniqueT m ()
+resetUnique = UniqueT (put (Unique 1))
 
 runUniqueT :: Monad m => UniqueT m a -> m a
 runUniqueT = flip evalStateT (Unique 1) . runUniqueT_
@@ -102,16 +104,29 @@ deriving instance MonadError e m => MonadError e (UniqueT m)
 
 class Monad m => MonadUnique m where
   unique :: m Unique
+  reset :: m ()
 
 instance Monad m => MonadUnique (UniqueT m) where
   unique = demand
+  reset = resetUnique
 
 uniques :: MonadUnique m => Int -> m [Unique]
 uniques n = replicateM n unique
 
-instance MonadUnique m => MonadUnique (ExceptT e m) where unique = lift unique
-instance MonadUnique m => MonadUnique (TraceT t m) where unique = lift unique
-instance (Monoid w, MonadUnique m) => MonadUnique (RWST r w s m) where unique = lift unique
-instance (Monoid w, MonadUnique m) => MonadUnique (WriterT w m) where unique = lift unique
+instance MonadUnique m => MonadUnique (ExceptT e m) where
+  unique = lift unique
+  reset = lift reset
+  
+instance MonadUnique m => MonadUnique (TraceT t m) where
+  unique = lift unique
+  reset = lift reset
+  
+instance (Monoid w, MonadUnique m) => MonadUnique (RWST r w s m) where
+  unique = lift unique
+  reset = lift reset
+  
+instance (Monoid w, MonadUnique m) => MonadUnique (WriterT w m) where
+  unique = lift unique
+  reset = lift reset
 
   

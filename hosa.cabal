@@ -11,9 +11,9 @@ cabal-version:         >=1.10
 library
   exposed-modules:
                        HoSA.Utils
-                       HoSA.Ticking                  
-                       HoSA.Data.Rewriting
-                       HoSA.Data.SimpleType
+                       HoSA.Ticking
+                       HoSA.Data.Expression
+                       HoSA.Data.SimplyTypedProgram
                        HoSA.Data.CallSite
                        HoSA.Data.SizeType                  
                        HoSA.Data.Index
@@ -70,4 +70,5 @@ executable hosa
                      TypeSynonymInstances,
                      FlexibleInstances,
                      ViewPatterns,                     
-                     StandaloneDeriving
+                     StandaloneDeriving,
+                     GADTs                     

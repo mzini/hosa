@@ -149,6 +149,7 @@ isValue atrs t = any isJust [matchLinear (lhs rl) t | rl <- rules atrs ]
 -- Parsing
 ----------------------------------------------------------------------
 
+
 data Symbol = Defined {symbolName :: String }
             | Constr  {symbolName :: String }
             deriving (Eq, Ord, Show)

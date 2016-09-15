@@ -5,8 +5,8 @@ import qualified Data.Map as Map
 import           Data.Maybe (fromMaybe)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           HoSA.Utils
-import           HoSA.Data.Rewriting
-import           HoSA.Data.SimpleType hiding (Signature)
+import           HoSA.Data.Expression
+import           HoSA.Data.SimplyTypedProgram hiding (Signature)
 import           HoSA.Data.CallSite
 import qualified HoSA.Data.Index as Ix
 
@@ -54,27 +54,28 @@ fvars = nub . walk where
 metaVars :: SizeType knd Ix.Term -> [Ix.MetaVar]
 metaVars = foldMap Ix.metaVars
 
--- signature
+type Signature f ix = Map.Map f (Schema ix)
 
-newtype Signature f ix = Signature { signatureToMap :: Map.Map f [(CallCtx f,Schema ix)] }
+-- newtype Signature f ix = Signature { signatureToMap :: Map.Map f [(Ctx,Schema ix)] }
 
-signatureFromList :: Ord f => [(CallCtx f,Schema ix)] -> Signature f ix
-signatureFromList = Signature . foldl insert Map.empty where
-  insert m d@(cc,_) = Map.insertWith (++) (ctxSym cc) [d] m
+-- signatureFromList :: Ord f => [(CtxSymbol f,Schema ix)] -> Signature f ix
+-- signatureFromList = Signature . foldl insert Map.empty where
+--   insert m (f,s) = Map.insertWith (++) (csSymbol f) [(csCallsite f,s)] m
 
-signatureToList :: Signature f ix -> [(CallCtx f,Schema ix)]
-signatureToList = concat . Map.elems . signatureToMap
+-- signatureToList :: Signature f ix -> [(CtxSymbol f,Schema ix)]
+-- signatureToList (Signature m) = concatMap t (Map.toList m) where
+--   t (f,ss) = [(CtxSym { csSymbol = f, csCallsite = cs },s) | (cs,s) <- ss]
 
-lookupSchemas :: Ord f => f -> Signature f ix -> [(CallCtx f, Schema ix)]
-lookupSchemas f = fromMaybe [] . Map.lookup f . signatureToMap
+-- lookupSchemas :: Ord f => f -> Signature f ix -> [(Ctx, Schema ix)]
+-- lookupSchemas f = fromMaybe [] . Map.lookup f . signatureToMap
 
-lookupSchema :: Ord f => CallCtx f -> Signature f ix -> Maybe (Schema ix)
-lookupSchema cc sig = do
-  ss <- Map.lookup (ctxSym cc) (signatureToMap sig)
-  lookup cc ss
+-- lookupSchema :: Ord f => CtxSymbol f -> Signature f ix -> Maybe (Schema ix)
+-- lookupSchema f sig = do
+--   ss <- Map.lookup (csSymbol f) (signatureToMap sig)
+--   lookup (csCallsite f) ss
 
-mapSignature :: (Schema ix -> Schema ix') -> Signature f ix -> Signature f ix'
-mapSignature f (Signature m) = Signature (Map.map (\ es -> [(cc,f s) | (cc,s) <- es]) m)
+-- mapSignature :: (Schema ix -> Schema ix') -> Signature f ix -> Signature f ix'
+-- mapSignature f (Signature m) = Signature (Map.map (\ es -> [(cc,f s) | (cc,s) <- es]) m)
 
 -- pretty printing
 
@@ -92,11 +93,13 @@ prettyType = ppTpe id
         ppQual [] = PP.empty
         ppQual vs = PP.text "∀" PP.<+> ppSeq PP.space [ PP.pretty (Ix.BVar v) | v <- vs] PP.<> PP.text "."
 
-instance (PP.Pretty f,PP.Pretty ix) => PP.Pretty (CallCtx f ::: SizeType knd ix) where
-  pretty (cc ::: s) = PP.pretty "∑" PP.<> PP.parens (PP.pretty cc) PP.<+> PP.text "↦" PP.<+> PP.pretty s
+-- instance (PP.Pretty f,PP.Pretty ix) => PP.Pretty (CallCtx f ::: SizeType knd ix) where
+--   pretty (cc ::: s) = 
                                                                                                           
 instance PP.Pretty ix => PP.Pretty (SizeType knd ix) where
   pretty = prettyType PP.pretty
 
 instance (PP.Pretty f, PP.Pretty ix) => PP.Pretty (Signature f ix) where
-  pretty sig = PP.vcat [ PP.hang 2 $ PP.pretty (cc ::: n) | (cc, n) <- signatureToList sig ]
+  pretty sig = PP.vcat [ PP.hang 2 $ pp f n | (f, n) <- Map.toList sig ] where
+    pp f n = PP.pretty "∑" PP.<> PP.parens (PP.pretty f) PP.<+> PP.text "↦" PP.<+> PP.pretty n
+  

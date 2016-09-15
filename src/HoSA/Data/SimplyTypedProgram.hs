@@ -1,25 +1,22 @@
-module HoSA.Data.SimplyTyped
+module HoSA.Data.SimplyTypedProgram
   ( 
     BaseType (..)
   , SimpleType
   , ST (..)
   , Environment
-  -- , Signature
-  -- , envFromDecls
-  -- , signatureFromDecls
-  -- , signatureToDecls
-  , Eqn (..) 
-  , Program (..)
-  , STAtrs (..)
+  , Signature
+  , TypedExpression
+  , TypedEquation (..)
+  , TypedProgram (..)
   , typeOf
-  -- , unType
   , tarity
+  , progUnion
   , inferSimpleType
-  -- , toATRS
   , TypingError (..))
 where
 
 import           Data.Maybe (fromJust)
+import qualified Data.Set as S
 import qualified Data.Map as M
 import           Control.Monad.Except
 import           Control.Monad.RWS
@@ -67,29 +64,34 @@ fvs (tp1 :-> tp2) = fvs tp1 ++ fvs tp2
 
 
 
-type Environment = M.Map UntypedVariable SimpleType
-type Signature = M.Map UntypedSymbol SimpleType
+type Environment v = M.Map v SimpleType
+type Signature f = M.Map f SimpleType
 
-type Var = Variable SimpleType
-type Sym ctx = Symbol ctx SimpleType
+type TypedExpression f v = Expression f v SimpleType
 
-type STExpression ctx = Expression (Sym ctx) Var
-
-data STEquation ctx = Eqn { eqEnv :: Environment 
-                          , eqEqn :: Equation (Sym ctx) Var
-                          , eqTpe :: SimpleType }
+data TypedEquation f v = TypedEquation { eqEnv :: Environment v
+                                       , eqEqn :: Equation f v SimpleType
+                                       , eqTpe :: SimpleType }
                   
-data STProgram ctx = STProgram { equations :: [Eqn ctx]
-                               , arity :: Sym ctx -> Int } 
+data TypedProgram f v = TypedProgram { equations :: [TypedEquation f v]
+                                     , signature :: Signature f }
+                                     -- , arity :: f -> Int } 
+
+progUnion :: Ord f => TypedProgram f v -> TypedProgram f v -> TypedProgram f v
+progUnion tp1 tp2 = TypedProgram { equations = equations tp1 ++ equations tp2
+                             , signature = signature tp1 `M.union` signature tp2}
+                  
+symbols :: TypedProgram f v -> S.Set f 
+symbols = M.keysSet . signature
 
 tarity :: SimpleType -> Int
 tarity TyBase{} = 0
 tarity (_ :*: _) = 0
 tarity (_ :-> tp) = 1 + tarity tp
 
-typeOf :: STExpression ctx -> SimpleType
-typeOf (Var v) = varType v
-typeOf (Fun f) = symType f
+typeOf :: TypedExpression f v -> SimpleType
+typeOf (Var _ tp) = tp
+typeOf (Fun _ tp _) = tp
 typeOf (Pair t1 t2) = typeOf t1 :*: typeOf t2
 typeOf (Apply t1 t2) =
   case typeOf t1 of
@@ -98,7 +100,7 @@ typeOf (Apply t1 t2) =
 typeOf (LetP _ _ t2) = typeOf t2
 
 
--- withType :: (Ord v, Ord f) => Environment -> Signature -> UntypedExpression -> STExpression ()
+-- withType :: (Ord v, Ord f) => Environment -> Signature -> UntypedExpression -> TypedExpression ()
 
 -- envFromDecls :: Ord f => [(f ::: SimpleType)] -> Environment f
 -- envFromDecls l = M.fromList [(f,tp) | (f ::: tp) <- l]
@@ -143,12 +145,12 @@ ident = TyVar
 singleton :: TypeVariable -> TyExp -> Substitution
 singleton v tp = \ w -> if v == w then tp else TyVar w
 
-data UP = UP UntypedEquation UntypedExpression TyExp TyExp
+data UP f v = UP (UntypedEquation f v) (UntypedExpression f v) TyExp TyExp
 
-instance Substitutable UP where
+instance Substitutable (UP f v) where
   substitute s (UP rl t tp1 tp2) = UP rl t (substitute s tp1) (substitute s tp2)
 
-unify :: MonadError TypingError m => [UP] -> m Substitution
+unify :: MonadError (TypingError f v) m => [UP f v] -> m Substitution
 unify = go ident where
   go s [] = return s
   go s (UP rl a tp1 tp2:ups) = do 
@@ -167,29 +169,29 @@ unify = go ident where
 -- Inference
 ----------------------------------------------------------------------
 
-data TypingError =
-  IncompatibleType UntypedEquation UntypedExpression TyExp TyExp
-  | LetPInLHS UntypedEquation
-  | VariableUndefined UntypedEquation (Variable ())
+data TypingError f v =
+  IncompatibleType (UntypedEquation f v) (UntypedExpression f v) TyExp TyExp
+  | LetPInLHS (UntypedEquation f v)
+  | VariableUndefined (UntypedEquation f v) v
     
-newtype InferM a =
-  InferM (RWST () [UP] (Env UntypedSymbol) (ExceptT TypingError UniqueM) a)
+newtype InferM f v a =
+  InferM (RWST () [UP f v] (Env f) (ExceptT (TypingError f v) UniqueM) a)
   deriving (  Applicative, Functor, Monad
-            , MonadError TypingError
-            , MonadState (Env UntypedSymbol)
-            , MonadWriter [UP]
+            , MonadError (TypingError f v)
+            , MonadState (Env f)
+            , MonadWriter [UP f v]
             , MonadUnique)
 
-runInfer :: InferM a -> Either TypingError (a, Env f, Substitution)
+runInfer :: InferM f v a -> Either (TypingError f v) (a, Env f, Substitution)
 runInfer (InferM m) = do
   (a,sig, up) <- runUnique (runExceptT (runRWST m () M.empty))
   subst <- unify up
   return (a, substitute subst sig, subst)
 
-freshTyExp :: InferM TyExp
+freshTyExp :: InferM f v TyExp
 freshTyExp = TyVar <$> unique
 
-lookupFunTpe :: Ord f => f -> InferM TyExp
+lookupFunTpe :: Ord f => f -> InferM f v TyExp
 lookupFunTpe f = do
   env <- get
   case M.lookup f env of
@@ -199,16 +201,16 @@ lookupFunTpe f = do
       return tp
     Just tp -> return tp
 
-require :: UntypedEquation -> UntypedExpression -> TyExp -> TyExp -> InferM ()
+require :: UntypedEquation f v -> UntypedExpression f v -> TyExp -> TyExp -> InferM f v ()
 require rl a tp1 tp2 = tell [UP rl a tp1 tp2]
 
-inferRule :: UntypedEquation -> InferM (Env v, UntypedEquation, TyExp)
+inferRule :: (Ord v, Ord f) => UntypedEquation f v -> InferM f v (Env v, UntypedEquation f v, TyExp)
 inferRule rl = do
   (tp, env) <- flip runStateT M.empty $ inferL (lhs rl)
   _ <- flip runReaderT env $ checkR (rhs rl) tp
   return (env, rl, tp)
   where
-    inferL (Var v) = do
+    inferL (Var v _) = do
       env <- get
       case M.lookup v env of
         Nothing -> do
@@ -216,7 +218,7 @@ inferRule rl = do
           put (M.insert v tp env)
           return tp
         Just tp -> return tp
-    inferL (Fun f) = lift (lookupFunTpe f)
+    inferL (Fun f _ _) = lift (lookupFunTpe f)
     inferL (Pair t1 t2) = (:*:) <$> inferL t1 <*> inferL t2
     inferL (Apply t1 t2) = do
       v1 <- lift freshTyExp
@@ -229,12 +231,12 @@ inferRule rl = do
       tp' <- inferL t
       lift (require rl t tp' tp)
       
-    inferR (Var v) = do
+    inferR (Var v _) = do
       env <- ask
       case M.lookup v env of
         Nothing -> throwError (VariableUndefined rl v)
         Just tp -> return tp
-    inferR (Fun f) = lift (lookupFunTpe f)
+    inferR (Fun f _ _) = lift (lookupFunTpe f)
     inferR (Pair t1 t2) = 
       (:*:) <$> inferR t1 <*> inferR t2
     inferR (Apply t1 t2) = do
@@ -243,7 +245,7 @@ inferRule rl = do
       checkR t1 (v1 :-> v2)
       checkR t2 v1
       return v2
-    inferR (LetP t1 (x,y) t2) = do
+    inferR (LetP t1 ((x,_),(y,_)) t2) = do
       v1 <- lift freshTyExp
       v2 <- lift freshTyExp
       checkR t1 (v1 :*: v2)
@@ -252,35 +254,31 @@ inferRule rl = do
       tp' <- inferR t
       lift (require rl t tp' tp)
 
-inferSimpleType :: (Ord v, Ord f) => [UntypedEquation] -> Either TypingError (STProgram ())
+  -- ar _ eqns f | defined f =
+  --   maximum $ 0 : [ length args
+  --                 | eqn <- eqns
+  --                 , let (Fun g _ _, args) = sexpr (lhs eqn)
+  --                 , f == g ]
+  -- ar sig _ c = tarity (sig M.! c)
+
+inferSimpleType :: (Ord v, Ord f) => [UntypedEquation f v] -> Either (TypingError f v) (TypedProgram f v)
 inferSimpleType eqns = toProg <$> runInfer (inferRule `mapM` eqns) where
   toProg (rs, sig, subst) = flip evalState (M.empty,0 :: Int) $ do
     gsig <- toGroundEnv sig
     teqns <- toEqn subst gsig `mapM` rs
-    return STProgram { equations = eqns, arity = ar gsig eqns }
+    return TypedProgram { equations = teqns
+                        , signature = gsig }
     
   toEqn subst gsig (env, rl, tp) = do
     genv <- toGroundEnv (substitute subst env)
     gtp <- toGroundTpe (substitute subst tp)
-    return Eqn { eqEnv = genv
-               , eqEqn = Equation (withType genv gsig (lhs rl)) (withType genv gsig (rhs rl))
-               , eqTpe = gtp }
-
-  ar gsig eqns = \ f -> arities M.! f where
-    arities = M.mapWithKey ar' gsig
-      
-    ar' Constr{} tp = tarity tp
-    ar' f@Defined{} _ = darity f
-    
-    darity f = maximum $ 0 : [ length args
-                             | eqn <- eqns
-                             , let (Fun g, args) = sexpr (lhs eqn)
-                             , f == g ]
+    return TypedEquation { eqEnv = genv
+                         , eqEqn = Equation (withType genv gsig (lhs rl)) (withType genv gsig (rhs rl))
+                         , eqTpe = gtp }
 
   withType env sig = mapExpression fun var where
-    fun f@(Defined n ctx _)  = Defined n ctx (sig M.! f)
-    fun f@(Constr n ctx _) = Constr n ctx (sig M.! f)
-    var v@(Variable n _) = Variable n (env M.! v)
+    fun f _ _  = (f,sig M.! f)
+    var v _  = (v,env M.! v)
 
   toGroundEnv env = traverse toGroundTpe env
   
@@ -318,7 +316,7 @@ instance PP.Pretty (ST g) where
 instance (PP.Pretty x) => PP.Pretty (M.Map x (ST g)) where
   pretty env = PP.vcat $ PP.punctuate (PP.text ", ") [ PP.pretty x PP.<+> PP.text "::" PP.<+> PP.pretty tp | (x,tp) <- M.toList env]
 
-instance (PP.Pretty f, PP.Pretty v) => PP.Pretty TypingError where
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypingError f v) where
   pretty (IncompatibleType rl t has expected) =
           PP.text "Typing error in rule:"
           PP.<$> PP.indent 2 (PP.pretty rl)
@@ -333,10 +331,16 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty TypingError where
     PP.text "Variable" PP.<+> PP.squotes (PP.pretty v) PP.<+> PP.text "undefined:"
     PP.<$> PP.indent 2 (PP.pretty rl)  
     
-instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (STRule f v) where
-  pretty STRule{..} =
-    PP.group (PP.pretty strlEnv)
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypedEquation f v) where
+  pretty TypedEquation{..} =
+    PP.group (PP.pretty eqEnv)
     PP.<+> PP.text "⊦"
-    PP.</> PP.group (PP.pretty strlUntypedRule
+    PP.</> PP.group (prettyEquation PP.pretty PP.pretty eqEqn
                      PP.<+> PP.text ":"
-                     PP.</> PP.pretty strlType)
+                     PP.</> PP.pretty eqTpe)
+
+instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypedProgram f v) where
+  pretty TypedProgram{..} =
+    PP.vcat (PP.pretty `map` equations)
+    PP.<$> PP.indent 2 (PP.text "where")
+    PP.<$> PP.indent 4 (PP.pretty signature)

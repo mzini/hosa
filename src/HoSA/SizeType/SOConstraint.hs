@@ -4,6 +4,7 @@ import           Control.Arrow (first)
 import           Control.Monad (forM_)
 import           Data.Tree (Forest)
 import           Data.List ((\\))
+import qualified Data.Map as Map
 import           Data.Maybe (catMaybes)
 import           Data.Either (rights)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
@@ -111,7 +112,7 @@ interpretType inter (SzArr n t) = SzArr (interpretType inter n) (interpretType i
 interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (interpretType inter t)
 
 interpretSig :: (Eq c, Num c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
-interpretSig inter = mapSignature (interpretType inter)
+interpretSig inter = Map.map (interpretType inter)
 
 -- putting things together
 solveConstraints :: (MonadUnique m, MonadIO m) => Processor m -> Signature f Term -> SOCS -> m (Maybe (Signature f (Polynomial Integer)), Forest String)

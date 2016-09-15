@@ -1,0 +1,4 @@
+scanr f b Nil = Cons b Nil;
+scanr f b (Cons x xs) = scanrHlp f x (scanr f b xs);
+scanrHlp f x (Cons y ys) = Cons (f x y) (Cons y ys);
+main = scanr Cons Nil;
