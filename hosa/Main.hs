@@ -56,7 +56,7 @@ defaultConfig =
        , clength = 0 &= help "Length of call-site contexts." }
   &= help "Infer size-types for given ATRS"
 
-abstraction :: HoSA -> C.CSAbstract f
+abstraction :: Eq f => HoSA -> C.CSAbstract f
 abstraction cfg = C.kca (clength cfg)
 
 startSymbols :: HoSA -> Maybe [Symbol]
@@ -70,11 +70,18 @@ constraintProcessor cfg =
     SCC -> logCS ==> try simplify ==> logCS ==> try (exhaustive (sccDecompose (try simplify ==> simple)))
   where
     logCS cs = logOpenConstraints cs >> return (Progress cs)
+    logStr str cs = logMsg str >> return (Progress cs)
     simple =
-      try (smt' defaultSMTOpts { degree = 1, maxCoeff = Just 1} )
+      logStr "SMT: trying strongly linear interpretation"
+      ==> try (smt' defaultSMTOpts { degree = 1, maxCoeff = Just 1} )
+      ==> logStr "SMT: trying linear interpretation"      
       ==> try (smt' defaultSMTOpts { degree = 1 })
+      ==> logStr "SMT: trying strongly multmixed interpretation"            
       ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 1})
-      ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Just 2})      
+      ==> logStr "SMT: trying multmixed interpretation"            
+      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 3})
+      ==> logStr "SMT: trying mixed interpretation"                  
+      ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})      
     smt' = smt (solver cfg)
     simplify =
       try instantiate
@@ -294,12 +301,14 @@ main = do
   r <- runUniqueT $ flip runReaderT cfg $ runExceptT $ do
     fs <- reader startSymbols
     abstr <- reader abstraction
-    p <- C.withCallContexts abstr fs <$> readProgram
-    status "Calling-context annotated program" (PP.pretty p)
+    p <- readProgram
+    status "Input program" (PP.pretty p)    
+    let p' = C.withCallContexts abstr fs p
+    status "Calling-context annotated program" (PP.pretty p')
     analysis <- reader analyse
     case analysis of
-      Time -> timeAnalysis p >>= status "Timed Signature"
-      Size -> sizeAnalysis p >>= status "Sized-Type Signature"
+      Time -> timeAnalysis p' >>= status "Timed Signature"
+      Size -> sizeAnalysis p' >>= status "Sized-Type Signature"
   case r of
     Left e@SizeTypeError{} -> putDocLn e >> exitSuccess
     Left e -> putDocLn e >> exitWith (ExitFailure (-1))

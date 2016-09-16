@@ -263,11 +263,13 @@ fromFile file = runParser parse 0 sn <$> liftIO (readFile file) where
 ppTuple :: (PP.Pretty a, PP.Pretty b) => (a,b) -> PP.Doc
 ppTuple (a,b) = PP.parens (ppSeq (PP.text ", ") [ PP.pretty a, PP.pretty b])
 
-prettyExpression :: (f -> PP.Doc) -> (v -> PP.Doc) -> Expression f v tp -> PP.Doc
-prettyExpression ppFun ppVar = pp id where
+prettyExpression :: Bool -> (f -> PP.Doc) -> (v -> PP.Doc) -> Expression f v tp -> PP.Doc
+prettyExpression showLabel ppFun ppVar = pp id where
   pp _ (Var v _) = ppVar v
-  pp _ (Fun f _ _) = ppFun f
-  pp _ (Pair t1 t2) = ppTuple (prettyExpression ppFun ppVar t1, prettyExpression ppFun ppVar t2)
+  pp _ (Fun f _ l)
+    | showLabel = ppFun f PP.<> PP.text "@" PP.<> PP.int l
+    | otherwise = ppFun f 
+  pp _ (Pair t1 t2) = ppTuple (pp id t1, pp id t2)
   pp par (Apply t1 t2) =
     par (pp id t1 PP.</> pp PP.parens t2)
   pp par (LetP t1 ((x,_),(y,_)) t2) =
@@ -275,8 +277,8 @@ prettyExpression ppFun ppVar = pp id where
                     PP.<$> PP.hang 3 (PP.text "in" PP.<+> pp id t2)))
 
 prettyEquation :: (f -> PP.Doc) -> (v -> PP.Doc) -> Equation f v tp -> PP.Doc
-prettyEquation ppFun ppVar eqn = pp (lhs eqn) PP.<+> PP.text "=" PP.</> pp (rhs eqn) where
-  pp = prettyExpression ppFun ppVar
+prettyEquation ppFun ppVar eqn = pp False (lhs eqn) PP.<+> PP.text "=" PP.</> pp False (rhs eqn) where
+  pp showLabel = prettyExpression showLabel ppFun ppVar
 
 instance PP.Pretty Symbol where
   pretty f | defined f = PP.bold (PP.text (symName f))
@@ -285,6 +287,6 @@ instance PP.Pretty Symbol where
 instance PP.Pretty Variable where pretty = PP.text . varName
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Expression f v tp) where
-  pretty = prettyExpression PP.pretty PP.pretty
+  pretty = prettyExpression False PP.pretty PP.pretty
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Equation f v tp) where
   pretty = prettyEquation PP.pretty PP.pretty

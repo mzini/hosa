@@ -1,3 +1,3 @@
 iter f b 0 = b;
 iter f b (S n) = f (iter f b n);
-add = iter S;
+add n m = iter S n m;

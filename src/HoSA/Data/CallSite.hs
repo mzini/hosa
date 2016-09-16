@@ -10,8 +10,9 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 type Ctx = [Location]
 
-data CtxSymbol f = CtxSym { csSymbol :: f
-                          , csCallsite :: [Location] }
+data CtxSymbol f = CtxSym { csSymbol   :: f
+                          , csCallsite :: Location
+                          , csContext  :: Maybe (CtxSymbol f) }
                  deriving (Eq, Ord, Show)
 
 type CSAbstract f = (f, SimpleType, Location) -> CtxSymbol f -> CtxSymbol f
@@ -19,22 +20,31 @@ type CSAbstract f = (f, SimpleType, Location) -> CtxSymbol f -> CtxSymbol f
 instance IsSymbol f => IsSymbol (CtxSymbol f) where
   isDefined = isDefined . csSymbol
 
-kca :: Int -> CSAbstract f
-kca n (f,tp,l) (CtxSym g ls) = CtxSym f ctx where
-  ctx 
-    | firstOrder tp = []
-    | otherwise = take n (l:ls)
+locations :: CtxSymbol f -> [Location]
+locations f = csCallsite f : maybe [] locations (csContext f)
 
-  firstOrder (tp1 :-> tp2) = dataType tp1 && firstOrder tp2
-  firstOrder tp = dataType tp
+cap :: Int -> CtxSymbol f -> CtxSymbol f
+cap 0 f = f { csCallsite = 0, csContext = Nothing }
+cap 1 f = f { csContext = Nothing }
+cap i f = f { csContext = cap (i-1) <$> csContext f }
 
-  dataType TyBase{} = True
-  dataType (a :*: b) = dataType a && dataType b
-  dataType _ = False
+
+kca :: Eq f => Int -> CSAbstract f
+kca n (f,tp,l) g 
+    | firstOrder tp = CtxSym f 0 Nothing
+    | csSymbol g == f = g
+    | otherwise = cap n (CtxSym f l (Just g))
+  where
+    firstOrder (tp1 :-> tp2) = dataType tp1 && firstOrder tp2
+    firstOrder tp = dataType tp
+
+    dataType TyBase{} = True
+    dataType (a :*: b) = dataType a && dataType b
+    dataType _ = False
   
 
-withCallContexts :: Ord f => CSAbstract f -> Maybe [f] -> TypedProgram f v -> TypedProgram (CtxSymbol f) v
-withCallContexts abstr startSymbols p = walk [] [CtxSym f [] | f <- M.keys sig, maybe True (elem f) startSymbols] where
+withCallContexts :: (IsSymbol f, Ord f) => CSAbstract f -> Maybe [f] -> TypedProgram f v -> TypedProgram (CtxSymbol f) v
+withCallContexts abstr startSymbols p = walk [] [CtxSym f 0 Nothing | f <- M.keys sig, maybe True (elem f) startSymbols || isConstructor f] where
   sig = signature p
   eqs = equations p
   definedBy f eq = fst (definedSymbol (eqEqn eq)) == (csSymbol f)
@@ -62,7 +72,7 @@ withCallContexts abstr startSymbols p = walk [] [CtxSym f [] | f <- M.keys sig, 
     annotateLhs f (Fun _ tp l) = [Fun f tp l]
     annotateLhs f (Apply s t) = Apply <$> annotateLhs f s <*> annotateArg t where
       annotateArg (Var v tp) = [Var v tp]
-      annotateArg (Fun f tp l) = [ Fun f' tp l | f' <- fs, csSymbol f' == f ]
+      annotateArg (Fun g tp l) = [ Fun g' tp l | g' <- fs, csSymbol g' == g ]
       annotateArg (Apply s t) = Apply <$> annotateArg s <*> annotateArg t
 
   annotateRhs f = mapExpression (\ g tp l -> (abstr (g,tp,l) f, tp)) (\ v tp -> (v,tp))
@@ -70,9 +80,9 @@ withCallContexts abstr startSymbols p = walk [] [CtxSym f [] | f <- M.keys sig, 
 -- -- pretty printing
 
 instance PP.Pretty f => PP.Pretty (CtxSymbol f) where
-  pretty (CtxSym f []) = PP.pretty f
-  pretty (CtxSym f ls) = PP.pretty f PP.<> PP.text "@" PP.<> loc where
-    loc = PP.hcat $ PP.punctuate (PP.text ".") [PP.int l | l <- ls]
+  pretty (CtxSym f 0 Nothing) = PP.pretty f
+  pretty f = PP.pretty (csSymbol f) PP.<> PP.text "@" PP.<> loc where
+    loc = PP.hcat $ PP.punctuate (PP.text ".") (PP.int `map` locations f)
 
 -- instance PP.Pretty f => PP.Pretty (CallCtx f) where
 --   pretty (CallCtx cs@(CallSite (f ::: _) _) css) = 
