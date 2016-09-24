@@ -1,0 +1,6 @@
+fold f [] b = b;
+fold f (l : ls) b = f l (fold f ls b);
+
+f1 n m l = (n,m) : l;
+f2 ms n l = fold (f1 n) ms l;
+product ns ms = fold (f2 ms) ns [];

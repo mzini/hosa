@@ -1,0 +1,8 @@
+mapL f NilL = NilL;
+mapL f (ConsL x xs) = ConsL (f x) (mapL f xs);
+
+append Nil ys = ys;
+append (Cons x xs) ys = Cons x (append xs ys);
+
+main xs ys = mapL (append xs) ys;
+

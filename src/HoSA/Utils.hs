@@ -9,9 +9,12 @@ module HoSA.Utils (
   , uniques
   , runUnique
   , runUniqueT
+  , runUniqueWithout
+  , runUniqueWithoutT
   -- * Monad Utils
   , scoped
   , concatMapM
+  , composeM
   , assertJust
   , assertRight
   -- * Pretty Printing Utils
@@ -19,13 +22,15 @@ module HoSA.Utils (
   , ($$)
   , ppSeq
   , putDocLn
+  , hPutDocLn
   , renderPretty
 ) where
 
-import System.IO (hPutStrLn, Handle, stderr)
+import System.IO (hPutStrLn, Handle)
 import           Control.Monad.State
 import           Control.Monad.Writer
 import           Control.Monad.Except
+import           Control.Monad.Reader
 import           Control.Monad.RWS
 import           Control.Monad.Trace
 import Control.Monad.Identity (Identity, runIdentity)
@@ -37,8 +42,11 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 scoped :: MonadState s m => m a -> m a
 scoped m = do { s <- get; a <- m; put s; return a }
     
-concatMapM :: (Monad m) => (a -> m [b]) -> [a] -> m [b]
-concatMapM f xs = concat `liftM` (f `mapM` xs)
+concatMapM :: (Monad m, Monoid b) => (a -> m b) -> [a] -> m b
+concatMapM f xs = mconcat `liftM` (f `mapM` xs)
+
+composeM :: Monad m => [a -> m a] -> a -> m a
+composeM = foldr (>=>) return
 
 assertJust :: MonadError e m => e -> Maybe a -> m a
 assertJust err = maybe (throwError err) return
@@ -90,9 +98,16 @@ demand = getU <* modifyU (\ (Unique i) -> Unique (i+1)) where
 resetUnique :: Monad m => UniqueT m ()
 resetUnique = UniqueT (put (Unique 1))
 
-runUniqueT :: Monad m => UniqueT m a -> m a
-runUniqueT = flip evalStateT (Unique 1) . runUniqueT_
+runUniqueWithoutT :: Monad m => [Unique] -> UniqueT m a -> m a
+runUniqueWithoutT vs = flip evalStateT (Unique (i+1)) . runUniqueT_ where
+  Unique i = maximum (Unique 0 : vs)
 
+runUniqueT :: Monad m => UniqueT m a -> m a
+runUniqueT = runUniqueWithoutT []
+
+runUniqueWithout :: [Unique] -> UniqueM a -> a
+runUniqueWithout vs = runIdentity . runUniqueWithoutT vs
+  
 runUnique :: UniqueM a -> a
 runUnique = runIdentity . runUniqueT
 
@@ -120,7 +135,15 @@ instance MonadUnique m => MonadUnique (ExceptT e m) where
 instance MonadUnique m => MonadUnique (TraceT t m) where
   unique = lift unique
   reset = lift reset
-  
+
+instance MonadUnique m => MonadUnique (StateT t m) where
+  unique = lift unique
+  reset = lift reset
+
+instance MonadUnique m => MonadUnique (ReaderT t m) where
+  unique = lift unique
+  reset = lift reset
+
 instance (Monoid w, MonadUnique m) => MonadUnique (RWST r w s m) where
   unique = lift unique
   reset = lift reset

@@ -1,28 +1,23 @@
 module HoSA.SizeType.Infer where
 
-import           Control.Arrow ((|||))
 import           Control.Monad.Except
+import           Control.Monad.Reader
 import           Control.Monad.Trace
 import           Control.Monad.Writer
-import           Data.List (nub, (\\))
-import           Data.Foldable
-import           Data.Maybe (fromMaybe, mapMaybe)
+import           Data.Maybe (fromJust)
 import           Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import           Data.Tree
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           HoSA.Utils
 import           HoSA.Data.Expression
 import           HoSA.Data.SimplyTypedProgram hiding (Signature)
-import           HoSA.Data.CallSite hiding (lhs, rhs)
-import qualified HoSA.Data.CallSite as C
 import           HoSA.Data.Index (Constraint(..))
 import qualified HoSA.Data.Index as Ix
 import           HoSA.Data.SizeType
 import           HoSA.SizeType.SOConstraint (SOCS (..))
-
+import           Debug.Trace (traceShow)
 
 
 --------------------------------------------------------------------------------
@@ -31,9 +26,9 @@ import           HoSA.SizeType.SOConstraint (SOCS (..))
 
 type TypingContext v = Map v (Either (Type Ix.Term) (Schema Ix.Term))
 
-type SizeTypedExpression f v = Expression f v (Schema Ix.Term)
+type SizeTypedExpression f v = TypedExpression (f,Schema Ix.Term) v 
 
-data Footprint v = FP (TypingContext v) (Type Ix.Term)
+data Footprint v = FP (Map v (Schema Ix.Term)) (Type Ix.Term)
 
 data Obligation f v = TypingContext v :- (SizeTypedExpression f v,Type Ix.Term)
 infixl 0 :-
@@ -45,15 +40,16 @@ infixl 0 :-
 type ExecutionLog = Forest String
 
 newtype InferM f v a =
-  InferM { runInferM_ :: ExceptT (SzTypingError f v) (TraceT String (UniqueT IO)) a }
+  InferM { runInferM_ :: ReaderT (Map f SimpleType) (ExceptT (SzTypingError f v) (TraceT String (UniqueT IO))) a }
   deriving (Applicative, Functor, Monad
             , MonadTrace String
             , MonadError (SzTypingError f v)
+            , MonadReader (Map f SimpleType)
             , MonadUnique
             , MonadIO)
 
-runInferM :: InferM f v a -> UniqueT IO (Either (SzTypingError f v) a, ExecutionLog)
-runInferM = runTraceT . runExceptT . runInferM_
+runInferM :: Map f SimpleType -> InferM f v a -> UniqueT IO (Either (SzTypingError f v) a, ExecutionLog)
+runInferM sig = runTraceT . runExceptT . flip runReaderT sig . runInferM_
   
 newtype InferCG f v a = InferCG { runInferCG_ :: WriterT (SOCS) (InferM f v) a }
   deriving (Applicative, Functor, Monad
@@ -68,6 +64,9 @@ execInferCG = execWriterT . runInferCG_
 
 liftInferM ::InferM f v a -> InferCG f v a
 liftInferM = InferCG . lift
+
+simpleSignature :: InferCG f v (Map f SimpleType)
+simpleSignature = liftInferM ask
 
   -- notOccur vs `mapM` Ix.metaVars t2
 
@@ -96,6 +95,8 @@ logMsg = trace . renderPretty
 logBlk :: MonadTrace String m => PP.Pretty e => e -> m a -> m a
 logBlk = scopeTrace . renderPretty
 
+-- logBlk e m = traceShow d (scopeTrace d m) where
+--   d = renderPretty e
 
 -- errors
 --------------------------------------------------------------------------------
@@ -104,6 +105,7 @@ data SzTypingError f v where
   IllformedLhs :: SizeTypedExpression f v -> SzTypingError f v
   IllformedRhs :: SizeTypedExpression f v -> SzTypingError f v
   IlltypedTerm :: SizeTypedExpression f v -> String -> SizeType knd Ix.Term -> SzTypingError f v
+  MatchFailure :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> SzTypingError f v
   DeclarationMissing :: f -> SzTypingError f v
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (SzTypingError f v) where
@@ -121,160 +123,221 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (SzTypingError f v) where
   pretty (DeclarationMissing f) =
     PP.text "Type-declaration of symbol" PP.<+> PP.squotes (PP.pretty f) PP.<+> PP.text "missing."
 
-  
--- abstractSignature :: (Eq v, Ord f, PP.Pretty f) =>
---   Map f SimpleType -> CSAbstract f -> Int -> [f] -> [AnnotatedRule f v] -> InferM f v (Signature f Ix.Term)
--- abstractSignature ssig abstr width fs ars = logBlk "Abstract Signature" $ do 
---     ccs <- callContexts abstr ars <$> sequence [ maybe (declMissing f) return (initialCC f <$> Map.lookup f ssig) | f <- fs]
---     signatureFromList <$> sequence [ do s <- maybe (declMissing f) (abstractSchema width) (Map.lookup f ssig)
---                                         logMsg (cc ::: s)
---                                         return (cc,s)
---                                    | cc <- ccs
---                                    , let f = ctxSym cc ]
---   where
---     declMissing = throwError . DeclarationMissing
-
-
+  pretty (MatchFailure s n) =
+    PP.text "Error in matching schema" PP.<+> PP.squotes (PP.pretty s)
+    PP.<+> PP.text "with" PP.<+> PP.squotes (PP.pretty n)
 -- inference
 --------------------------------------------------------------------------------
 
-matrix :: MonadUnique m => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
-matrix (SzBase bt ix) = return ([],SzBase bt ix)
-matrix (SzQArr ixs n p) = do
-  ixs' <- sequence [ uniqueVar | _ <- ixs]
-  let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
-  return (ixs', SzArr (Ix.inst subst n) (Ix.inst subst p))
 
-returnIndex :: MonadUnique m => SizeType knd Ix.Term -> m Ix.Term
-returnIndex (SzBase _ ix) = return ix
-returnIndex (SzArr _ p) = returnIndex p
-returnIndex s@SzQArr{} = matrix s >>= returnIndex . snd
-returnIndex SzPair{} = error "returnIndex on pairs not defined"
+-- TODO
+type TSubst = [(TypeVariable, Schema Ix.Term)]
+
+after :: MonadUnique m => TSubst -> TSubst -> m TSubst
+s1 `after` s2 = do
+  s2' <- sequence [(v,) <$> substituteTyVars s1 s | (v,s) <- s2 ]
+  return (s2' ++ s1)
+
+class TSubstitute a where
+  substituteTyVars :: MonadUnique m => TSubst -> a -> m a
+
+instance TSubstitute (Type Ix.Term) where
+  substituteTyVars subst t@(SzVar v)      =
+    case lookup v subst of
+      Nothing -> return t
+      Just s -> snd <$> matrix s
+  substituteTyVars subst (SzCon n ts ix)  =
+    SzCon n <$> mapM (substituteTyVars subst) ts <*> return ix
+  substituteTyVars subst (SzArr n p) = do
+    SzArr <$> substituteTyVars subst n <*> substituteTyVars subst p
+  substituteTyVars subst (SzPair s1 s2)   = SzPair <$> substituteTyVars subst s1 <*> substituteTyVars subst s2
+
+instance TSubstitute (Schema Ix.Term) where                                            
+  substituteTyVars subst s@(SzVar v)      =
+    case lookup v subst of
+      Nothing -> return s
+      Just s' -> return s'
+  substituteTyVars subst (SzCon n ts ix)  = SzCon n <$> mapM (substituteTyVars subst) ts <*> return ix
+  substituteTyVars subst (SzQArr ixs n p) = do
+    ixs' <- sequence [uniqueVar | _ <- ixs]
+    let ixsubst = Ix.substFromList (zip ixs (Ix.bvar `map` ixs'))
+    n' <- substituteTyVars subst (ixsubst `Ix.inst` n)
+    p' <- substituteTyVars subst (ixsubst `Ix.inst` p)
+    return (SzQArr ixs' n' p')
+  substituteTyVars subst (SzPair s1 s2)   = SzPair <$> substituteTyVars subst s1 <*> substituteTyVars subst s2
+
+instance TSubstitute (TypingContext v) where
+  substituteTyVars subst ctx = mapM f ctx where
+    f (Left t) = Left <$> substituteTyVars subst t
+    f (Right t) = Right <$> substituteTyVars subst t
+  
+logObligation :: MonadTrace String m => (PP.Pretty f, PP.Pretty v) => Obligation f v -> m ()
+logObligation = logMsg . PP.pretty
 
 footprint :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SizeTypedExpression f v -> InferM f v (Footprint v)
 footprint l = logBlk "Footprint" $ fpInfer l
   where
     fpInfer t = do
       fp@(FP ctx tp) <- fpInfer_ t
-      logMsg (PP.pretty ctx PP.<+> PP.text "⊦"
-              PP.<+> PP.pretty t
-              PP.<+> PP.text ":" PP.<+> PP.pretty tp)
+      logObligation (Map.map Right ctx :- (t,tp))
       return fp
-    fpInfer_ (Fun _ s _) =
-      FP Map.empty . snd <$> matrix s
-    fpInfer_ (Apply t1 t2) = do
+    fpInfer_ (Fun (_,s) _ _) = do
+      (_, tp) <- rename s >>= matrix
+      return (FP Map.empty tp)
+    fpInfer_ (Apply _ t1 (Var v _)) = do
+      FP ctx tp <- fpInfer t1
+      case tp of
+        SzArr n p -> return (FP (Map.insert v n ctx) p)
+        _ -> throwError (IlltypedTerm t1 "function type" tp)
+    fpInfer_ (Apply _ t1 t2) = do
       FP ctx1 tp1 <- fpInfer t1
+      FP ctx2 tp2 <- fpInfer t2
       case tp1 of
         SzArr n p -> do
-          (ctx2,s) <- fpCheck t2 n
-          return (FP (ctx1 `Map.union` ctx2) (s `Ix.o` p))
-        _ -> throwError (IlltypedTerm t1 "function type" tp1)
-    fpInfer_ t = throwError (IllformedLhs l)
+          (si,st) <- fpMatch n tp2
+          ctx1' <- mapM (substituteTyVars st) ctx1
+          return (FP (ctx1' `Map.union` ctx2) (Ix.substFromList si `Ix.o` p)) 
+        _ -> throwError (IlltypedTerm t1 "function type" tp1)        
+    fpInfer_ _ = throwError (IllformedLhs l)
 
-    fpCheck (Var v _) s =
-      return (Map.singleton v (Right s), Ix.idSubst)
-    fpCheck t (SzBase _ (Ix.Var (Ix.FVar i))) = do
-      FP ctx tp <- fpInfer t
-      case tp of
-        SzBase _ a -> return (ctx, Ix.substFromList [(i,a)])
-        _ -> throwError (IlltypedTerm t "base type" tp)
-    fpCheck t tp = throwError (IlltypedTerm t "non-functional type" tp)
+    fpMatch :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ([(Ix.VarId, Ix.Term)], [(TypeVariable, Schema Ix.Term)])
+    fpMatch (SzVar v1)                         tp             = return ([],[(v1,toSchema tp)])
+    fpMatch tp                                 (SzVar v2)     = return ([],[(v2,toSchema tp)])    
+    fpMatch (SzCon n ss1 (Ix.Var (Ix.FVar i))) (SzCon m ss2 a) | n == m = do
+          (sis,sts) <- unzip <$> zipWithM fpMatch ss1 ss2
+          return ((i,a):concat sis, concat sts)
+    fpMatch (SzPair s1 s2)                     (SzPair t1 t2) = do
+      (si1,st1) <- fpMatch s1 t1
+      (si2,st2) <- fpMatch s2 t2
+      return (si1 ++ si2, st1 ++ st2)
+    fpMatch s          n                     = throwError (MatchFailure s n)
 
 obligations :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => Signature f Ix.Term -> TypedProgram f v -> InferM f v [Obligation f v]
 obligations sig p = mapM obligationsFor (eqEqn `map` equations p) where
   obligationsFor eq = do
-    FP ctx tp <- footprint (toTypedExp (lhs eq))
-    return (ctx :- (toTypedExp (rhs eq), tp))
-  toTypedExp = mapExpression fun var
-  fun f _ _ = (f, sig Map.! f)
-  var v _ = (v,undefined)
+    FP ctx tp <- footprint (annotate (lhs eq))
+    return (Map.map Right ctx :- (annotate (rhs eq), tp))
+  annotate = mapExpression fun var
+  fun f tp _ = ((f, sig Map.! f),tp)
+  var v tp = (v,tp)
 
 skolemVar :: InferCG f v Ix.Term
 skolemVar = Ix.metaVar <$> (unique >>= Ix.freshMetaVar)
 
 instantiate :: Schema Ix.Term -> InferCG f v (Type Ix.Term)
-instantiate (SzBase bt ix) = return (SzBase bt ix)
-instantiate (SzQArr ixs n p) = do
-  s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemVar | ix <- ixs]
-  return (SzArr (Ix.inst s n) (Ix.inst s p))
+instantiate s = do
+  (vs,tp) <- matrix s
+  subst <- Ix.substFromList <$> sequence [ (v,) <$> skolemVar | v <- vs]
+  return (subst `Ix.o` tp)
+-- instantiate (SzBase bt ix) = return (SzBase bt ix)
+-- instantiate (SzList t ix) = SzList <$> (instantiate t) <*> return ix
+-- instantiate (SzQArr ixs n p) = do
+--   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemVar | ix <- ixs]
+--   return (SzArr (Ix.inst s n) (Ix.inst s p))
 
-subtypeOf :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v ()
-t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2
+subtypeOf :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
+t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.</> PP.text "⊑" PP.<+> PP.pretty t2) $ do
+  subst <- t1 `subtypeOf_` t2
+  logMsg subst
+  return subst
 
-subtypeOf_ :: SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v ()
-SzBase bt1 ix1 `subtypeOf_` SzBase bt2 ix2
-  | bt1 == bt2 = require (ix2 :>=: ix1)
+subtypeOf_ :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
+SzVar v1 `subtypeOf_` SzVar v2 | v1 == v2 = return []
+SzVar v  `subtypeOf_` t = return [ (v, toSchema t) ]
+t `subtypeOf_` SzVar v = return [ (v, toSchema t) ]
+SzCon n ts1 ix1 `subtypeOf_` SzCon m ts2 ix2 | n == m = do
+  require (ix2 :>=: ix1)
+  sig <- simpleSignature
+  let l = zip (variant sig n ts1) (variant sig n ts2)
+          ++ zip (contraVariant sig n ts2) (contraVariant sig n ts1)
+  foldM (\ subst (s1,s2) -> do
+            s1' <- substituteTyVars subst s1
+            s2' <- substituteTyVars subst s2
+            subst' <- s1' `subtypeOf` s2'
+            subst' `after` subst) [] l
 SzArr n p `subtypeOf_` SzArr m q = do
-  m `subtypeOf_` n
-  p `subtypeOf_` q
+  subst1 <- m `subtypeOf` n
+  p' <- substituteTyVars subst1 p
+  q' <- substituteTyVars subst1 q
+  subst2 <- p' `subtypeOf` q'
+  subst2 `after` subst1
 s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do 
   (vs,t1) <- matrix s1
-  (_, t2) <- matrix s2
   t2' <- instantiate s2
-  logBlk (PP.text "occurs check") $ do 
-    notOccur vs `mapM` (metaVars t1 ++ metaVars t2)
-  t1 `subtypeOf_` t2'
-SzPair t1 t2 `subtypeOf_` SzPair t1' t2' = do
-  t1 `subtypeOf_` t1'
-  t2 `subtypeOf_` t2'  
-_ `subtypeOf_` _ = error "subtypeOf_: incompatible types"
+  subst <- t1 `subtypeOf` t2'
+  mvs1 <- metaVars <$> substituteTyVars subst t1
+  mvs2 <- metaVars <$> substituteTyVars subst t2'
+  void (logBlk (PP.text "occurs check") (notOccur vs `mapM` (mvs1 ++ mvs2)))
+  return subst
+SzPair s1 s2 `subtypeOf_` SzPair t1 t2 = do
+  subst1 <- s1 `subtypeOf` t1
+  s2' <- substituteTyVars subst1 s2
+  t2' <- substituteTyVars subst1 t2
+  subst2 <- s2' `subtypeOf` t2'
+  subst2 `after` subst1
+s `subtypeOf_` n = throwError (MatchFailure s n)
 
-inferSizeType :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedExpression f v -> InferCG f v (Type Ix.Term)
+inferSizeType :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedExpression f v -> InferCG f v (TypingContext v, Type Ix.Term)
 inferSizeType ctx t@(Var v _) = do
   tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= either return instantiate 
-  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty v PP.<+> PP.text ":" PP.<+> PP.pretty tp)    
-  return tp
-inferSizeType _ (Fun f s _) = do
-  tp <- instantiate s
-  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty f PP.<+> PP.text ":" PP.<+> PP.pretty tp)
-  return tp
-inferSizeType ctx t@(Pair t1 t2) =  do
-  tp1 <- inferSizeType ctx t1
-  tp2 <- inferSizeType ctx t2
+  logObligation (ctx :- (t, tp))
+  return (ctx,tp)
+inferSizeType ctx t@(Fun (_,s) _ _) = do
+  tp <- rename s >>= instantiate
+  logObligation (ctx :- (t,tp))
+  return (ctx,tp)
+inferSizeType ctx t@(Pair _ t1 t2) =  do
+  (ctx1, tp1) <- inferSizeType ctx t1
+  (ctx2, tp2) <- inferSizeType ctx1 t2
   let tp = SzPair tp1 tp2
-  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty t PP.<+> PP.text ":" PP.<+> PP.pretty tp)
-  return tp
-inferSizeType ctx t@(Apply t1 t2) =
+  logObligation (ctx :- (t,tp))  
+  return (ctx2,tp)
+inferSizeType ctx t@(Apply _ t1 t2) =
   logBlk (PP.text "infer" PP.<+> PP.pretty t PP.<+> PP.text "...") $ do
-  tp1 <- inferSizeType ctx t1
+  (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of
     SzArr sArg tBdy -> do
       (vs,tArg) <- matrix sArg
-      notOccur vs `mapM` concatMap metaVars (sArg : [ tp | (v, Right tp) <- Map.toList ctx,  v `elem` fvarsDL t2 [] ])
-      tp2 <- inferSizeType ctx t2
-      tp2 `subtypeOf` tArg
-      logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty t PP.<+> PP.text ":" PP.<+> PP.pretty tBdy)
-      return tBdy
+      notOccur vs `mapM_` concatMap metaVars (sArg : [ tp | (v, Right tp) <- Map.toList ctx1,  v `elem` fvars t2 ])
+      (ctx2,tp2) <- inferSizeType ctx1 t2
+      subst <- tp2 `subtypeOf` tArg
+      ctx2' <- substituteTyVars subst ctx2
+      tBdy' <- substituteTyVars subst tBdy
+      logObligation (ctx2' :- (t,tBdy))
+      return (ctx2',tBdy')
     _ -> throwError (IlltypedTerm t1 "function type" tp1)
-inferSizeType ctx t@(LetP t1 ((x,_),(y,_)) t2) =
+inferSizeType ctx t@(LetP _ t1 ((x,_),(y,_)) t2) =
   logBlk (PP.text "infer" PP.<+> PP.pretty t PP.<+> PP.text "...") $ do
-  tp1 <- inferSizeType ctx t1
-  logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty t1 PP.<+> PP.text ":" PP.<+> PP.pretty tp1)
+  (ctx1,tp1) <- inferSizeType ctx t1
+  logObligation (ctx1 :- (t1,tp1))
   case tp1 of
     SzPair tpx tpy -> do
-      let ctx' = Map.insert x (Left tpx) (Map.insert y (Left tpy) ctx)
-      tp <- inferSizeType ctx' t2
-      logMsg (PP.text "Γ ⊦" PP.<+> PP.pretty t2 PP.<+> PP.text ":" PP.<+> PP.pretty tp)
-      return tp
+      let ctx1' = Map.insert x (Left tpx) (Map.insert y (Left tpy) ctx1)
+          adj v c = case Map.lookup v ctx1 of
+                      Nothing -> Map.delete v c
+                      Just tp -> Map.insert v tp c
+      (ctx2,tp) <- inferSizeType ctx1' t2
+      let ctx2' = adj x (adj y ctx2')
+      logObligation (ctx2' :- (t2,tp))
+      return (ctx2,tp)
     _ -> throwError (IlltypedTerm t1 "pair type" tp1)
 
-obligationToConstraints :: (PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligation f v -> InferM f v SOCS
-obligationToConstraints o@(ctx :- (t, tp)) =  logBlk o $ execInferCG $ do 
-  tp' <- inferSizeType ctx t
-  tp' `subtypeOf` tp
-
+obligationToConstraints :: (IsSymbol f, PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligation f v -> InferM f v SOCS
+obligationToConstraints ob@(ctx :- (t, tp)) =  logBlk ob $ execInferCG $ do 
+  (_,tp') <- inferSizeType ctx t
+  void (tp' `subtypeOf` tp) -- TODO
 
 generateConstraints :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Signature f Ix.Term -> TypedProgram f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
-generateConstraints sig p = runInferM $ do
-  ocs <- logBlk "Orientation constraints" $ 
-    obligations sig p >>= mapM obligationToConstraints
-  ccs <- logBlk "Constructor constraints" $ execInferCG $ 
-    forM_ (Map.toList sig) $ \ (f,s) -> 
-        unless (isDefined f) $ do
-           ix <- returnIndex s
-           require (ix :=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
-  return (mconcat (ccs:ocs))
+generateConstraints sig p = runInferM (signature p) $ do
+  logBlk "Orientation constraints" $ 
+    obligations sig p >>= concatMapM obligationToConstraints
+  -- ccs <- logBlk "Constructor constraints" $ execInferCG $ 
+  --   forM_ (Map.toList sig) $ \ (f,s) -> 
+  --       unless (isDefined f) $ do
+  --          ix <- returnIndex s
+  --          require (ix :=: Ix.ixSucc (Ix.ixSum [Ix.fvar v | v <- Ix.fvars ix]))
+  -- return (mconcat (ccs:ocs))
 
 -- pretty printers
 --------------------------------------------------------------------------------
@@ -291,6 +354,13 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Obligation f v) where
     PP.<+> PP.text "⊦" PP.<+> PP.pretty t
     PP.<+> PP.text ":" PP.<+> PP.pretty s
 
+instance {-# OVERLAPPING #-} PP.Pretty TSubst where
+  pretty [] = PP.text "Ø"
+  pretty l = PP.vcat $ PP.punctuate (PP.text ", ") [ PP.pretty x PP.<+> PP.text "↦" PP.<+> PP.pretty tp | (x,tp) <- l]
+  
+instance {-# OVERLAPPING #-} (PP.Pretty f) => PP.Pretty (f,Schema ix) where
+  pretty (f,_) = PP.pretty f
+  
 instance PP.Pretty v => PP.Pretty (Footprint v) where
   pretty (FP ctx tp) =
     PP.parens (PP.pretty ctx PP.<> PP.comma PP.<+> PP.pretty tp)

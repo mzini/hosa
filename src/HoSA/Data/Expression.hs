@@ -10,13 +10,13 @@ module HoSA.Data.Expression (
   , IsSymbol (..)
   , isConstructor
   , funs
-  , funsDL
   , fvars
-  , fvarsDL
+  , tfuns
+  , tfvars
+  , tfunsDL
+  , tfvarsDL
   , sexpr
   , fromSexpr
-  , mapExpression
-  , mapExpressionM
   , headSymbol
   , definedSymbol
   -- parsing
@@ -32,8 +32,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Text.Parsec
 import Text.ParserCombinators.Parsec (CharParser)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import qualified Data.Map as M
-import Data.Maybe (isJust,fromJust)
+import Data.Maybe (fromJust)
 import HoSA.Utils (ppSeq)
 
 
@@ -43,6 +42,9 @@ import HoSA.Utils (ppSeq)
 
 data Symbol = Symbol { symName :: String, defined :: Bool }
   deriving (Eq, Ord, Show)
+
+-- TODO: generalise
+
 
 newtype Variable = Variable { varName :: String }
   deriving (Eq, Ord, Show)
@@ -60,11 +62,20 @@ type Location = Int
 
 data Expression f v tp =
   Var v tp
-  | Fun f tp Location 
-  | Pair (Expression f v tp) (Expression f v tp)  
-  | Apply (Expression f v tp) (Expression f v tp)
+  | Pair (tp,tp) (Expression f v tp) (Expression f v tp)
+  | Fun f tp Location
+  | Apply tp (Expression f v tp) (Expression f v tp)
+  | LetP tp (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)  
 --  | Lam v (Expression f v tp)  
-  | LetP (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)
+
+-- TODO: generalise
+pattern NIL = Symbol "[]" False
+pattern CONS = Symbol "(:)" False
+
+enil :: Location -> UntypedExpression Symbol v
+enil = Fun NIL ()
+econs :: Location -> UntypedExpression Symbol v -> UntypedExpression Symbol v -> UntypedExpression Symbol v
+econs l h t = Apply () (Apply () (Fun CONS () l) h) t
 
 data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Expression f v tp }
 
@@ -75,55 +86,45 @@ type UntypedEquation f v = Equation f v ()
 -- ops
 ----------------------------------------------------------------------
 
+tfunsDL :: Expression f v tp -> [(f,tp,Location)] -> [(f,tp,Location)]
+tfunsDL (Var _ _)        = id
+tfunsDL (Fun f tp l)     = (:) (f,tp,l)
+tfunsDL (Pair _ t1 t2)   = tfunsDL t2 . tfunsDL t1
+tfunsDL (Apply _ t1 t2)  = tfunsDL t2 . tfunsDL t1
+tfunsDL (LetP _ t1 _ t2) = tfunsDL t2 . tfunsDL t1
+
+tfvarsDL :: Eq v => Expression f v tp -> [(v,tp)] -> [(v,tp)]
+tfvarsDL (Var v tp)                   = (:) (v,tp)
+tfvarsDL (Fun _ _ _)                  = id
+tfvarsDL (Pair _ t1 t2)               = tfvarsDL t2 . tfvarsDL t1
+tfvarsDL (Apply _ t1 t2)              = tfvarsDL t2 . tfvarsDL t1
+tfvarsDL (LetP _ t1 ((x,_),(y,_)) t2) =
+  (++) (filter (\ (z,_) -> z == x || z == y) (tfvarsDL t2 [])) . tfvarsDL t1
+
+tfuns :: Expression f v tp -> [(f,tp,Location)]
+tfuns = flip tfunsDL []
+
+tfvars :: Eq v => Expression f v tp -> [(v,tp)]
+tfvars = flip tfvarsDL []
+
 funs :: Expression f v tp -> [f]
-funs = flip funsDL []
+funs e = [ f | (f,_,_) <- tfunsDL e []]
 
 fvars :: Eq v => Expression f v tp -> [v]
-fvars = flip fvarsDL []
-
-funsDL :: Expression f v tp -> [f] -> [f]
-funsDL (Var _ _) = id
-funsDL (Fun f _ _) = (:) f
-funsDL (Pair t1 t2) = funsDL t2 . funsDL t1
-funsDL (Apply t1 t2) = funsDL t2 . funsDL t1
-funsDL (LetP t1 _ t2) = funsDL t2 . funsDL t1
-
-fvarsDL :: Eq v => Expression f v tp -> [v] -> [v]
-fvarsDL (Var v _) = (:) v
-fvarsDL (Fun f _ _) = id
-fvarsDL (Pair t1 t2) = fvarsDL t2 . fvarsDL t1
-fvarsDL (Apply t1 t2) = fvarsDL t2 . fvarsDL t1
-fvarsDL (LetP t1 ((x,_),(y,_)) t2) = (++) (filter (\ z -> z == x || z == y) (fvarsDL t2 [])) . fvarsDL t1
-                                  
-mapExpression :: (f -> tp -> Location -> (f',tp')) -> (v -> tp -> (v',tp')) -> Expression f v tp -> Expression f' v' tp'
-mapExpression _ g (Var v tp) = uncurry Var (g v tp)
-mapExpression f _ (Fun s tp l) = Fun s' tp' l where (s',tp') = f s tp l
-mapExpression f g (Pair t1 t2) = Pair (mapExpression f g t1) (mapExpression f g t2)
-mapExpression f g (Apply t1 t2) = Apply (mapExpression f g t1) (mapExpression f g t2)
-mapExpression f g (LetP t1 ((x1,tp1),(x2,tp2)) t2) = LetP (mapExpression f g t1) (g x1 tp1,g x2 tp2) (mapExpression f g t2)
-
-mapExpressionM :: Applicative m => (f -> tp -> Location -> m (f',tp')) -> (v -> tp -> m (v',tp')) -> Expression f v tp -> m (Expression f' v' tp')
-mapExpressionM _ g (Var v tp) = uncurry Var <$> g v tp
-mapExpressionM f _ (Fun s tp l) = fun <$> f s tp l where fun (s',tp') = Fun s' tp' l
-mapExpressionM f g (Pair t1 t2) = Pair <$> mapExpressionM f g t1 <*> mapExpressionM f g t2
-mapExpressionM f g (Apply t1 t2) = Apply <$> mapExpressionM f g t1 <*> mapExpressionM f g t2
-mapExpressionM f g (LetP t1 ((x1,tp1),(x2,tp2)) t2) =
-  LetP <$> mapExpressionM f g t1 <*> ((,) <$> g x1 tp1 <*> g x2 tp2) <*> mapExpressionM f g t2
+fvars = map fst . flip tfvarsDL []
 
 
 sexpr :: Expression f v tp -> (Expression f v tp, [Expression f v tp])
-sexpr (Apply t1 t2) = (h, rest ++ [t2]) where (h,rest) = sexpr t1
+sexpr (Apply _ t1 t2) = (h, rest ++ [t2]) where (h,rest) = sexpr t1
 sexpr t = (t,[])
 
-fromSexpr :: Expression f v tp -> [Expression f v tp] -> Expression f v tp
-fromSexpr = foldl Apply
+fromSexpr :: UntypedExpression f v -> [UntypedExpression f v] -> UntypedExpression f v
+fromSexpr = foldl (Apply ())
 
 headSymbol :: Expression f v tp -> Maybe (f,tp)
-headSymbol (Fun f tp _) = Just (f,tp)
-headSymbol (Apply t1 _) = headSymbol t1
-headSymbol Var {} = Nothing
-headSymbol Pair {} = Nothing
-headSymbol LetP {} = Nothing
+headSymbol (Fun f tp _)   = Just (f,tp)
+headSymbol (Apply _ t1 _) = headSymbol t1
+headSymbol _              = Nothing
 
 definedSymbol :: Equation f v tp -> (f,tp)
 definedSymbol = fromJust . headSymbol . lhs
@@ -182,12 +183,12 @@ reserved = void . lexeme . string
 pair :: Parser a -> Parser b -> Parser (a,b)
 pair pa pb = parens $ do
   a <- pa
-  comma
+  _ <- comma
   b <- pb
   return (a,b)
 
 reservedWords :: [String]
-reservedWords = words "let be in ; ="
+reservedWords = words "let be in ; = [ ] ::"
 
 -- parsers
 ------------------------------------------------------------
@@ -198,30 +199,46 @@ fun f = Fun f () <$> freshLocation
 var :: Variable -> Parser (UntypedExpression Symbol Variable)
 var v = return (Var v ())
 
+-- lstP :: Parser (UntypedExpression Symbol Variable) -> Parser (UntypedExpression Symbol Variable)
+-- lstP e = try (parens pList) <|> pList
+--   where 
+--     pList = try (reserved "[]" >> enil <$> freshLocation)
+--             <|> (e >>= \ h ->
+--                     try (reserved "::" >> )
+--                     <|> return h)
+
+lstP :: [UntypedExpression Symbol Variable] -> Parser (UntypedExpression Symbol Variable)
+lstP [] = enil <$> freshLocation
+lstP [e] = return e
+lstP (e:es') = econs <$> freshLocation <*> return e <*> lstP es'
+
+nilP :: Parser (UntypedExpression Symbol Variable)
+nilP = reserved "[]" >> (enil <$> freshLocation)
+  
 lhsP :: Parser (UntypedExpression Symbol Variable)
 lhsP = application (s <?> "function") arg where
   
-  application h rest = foldl Apply <$> h <*> many rest
+  application h rest = foldl (Apply ()) <$> h <*> many rest
   
-  hd = try c <|> parens (application hd arg)
+  arg = (p `sepBy1` reserved ":") >>= lstP
   
-  arg = try c <|> try v <|> parens (application arg arg)
-  
+  p = try nilP <|> try c <|> try v <|> parens (application arg arg)
+    
   s = (symbol >>= fun) <?> "function symbol"
   
   c = (constructor >>= fun) <?> "constructor"
   
   v = (variable >>= var) <?> "variable"
 
-
 rhsP :: [Variable] -> Parser (UntypedExpression Symbol Variable)
 rhsP = expression where
   
-  expression vs = foldl Apply <$> arg vs <*> many (arg vs)
+  expression vs = foldl (Apply ()) <$> arg vs <*> many (arg vs)
   
-  arg vs = l vs <|> try c <|> try (v vs) <|> try s <|> par vs
-  
-  par vs = foldr1 Pair <$> parens (expression vs `sepBy1` comma)
+  arg vs = (p `sepBy1` reserved ":") >>= lstP where
+    p = l vs <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
+
+  par vs = foldr1 (Pair ((),())) <$> parens (expression vs `sepBy1` comma)
     
   c = (constructor >>= fun) <?> "constructor"
   
@@ -238,20 +255,19 @@ rhsP = expression where
     (v1,v2) <- pair variable variable
     reserved "in"
     t2 <- expression (v1 : v2 : vs)
-    return (LetP t1 ((v1,()),(v2,())) t2)
+    return (LetP () t1 ((v1,()),(v2,())) t2)
 
 eqP :: Parser (UntypedEquation Symbol Variable)
-eqP = do {l <- lhsP; lexeme (string "="); r <- rhsP (fvars l); return (Equation l r); } <?> "equation"
+eqP = do {l <- lhsP; reserved "="; r <- rhsP (fvars l); return (Equation l r); } <?> "equation"
 
 eqsP :: Parser [UntypedEquation Symbol Variable]
-eqsP = do {rs <- eqP `endBy` sep; return rs} where
-  sep = lexeme (string ";")
+eqsP = do {rs <- eqP `endBy` reserved ";"; return rs}
 
 
 fromFile :: MonadIO m => FilePath -> m (Either ParseError [UntypedEquation Symbol Variable])
-fromFile file = runParser parse 0 sn <$> liftIO (readFile file) where
+fromFile file = runParser parser 0 sn <$> liftIO (readFile file) where
   sn = "<file " ++ file ++ ">"
-  parse = many (try comment <|> whiteSpace1) *> (eqsP) <* eof
+  parser = many (try comment <|> whiteSpace1) *> (eqsP) <* eof
 
 
 -- pretty printing
@@ -269,12 +285,13 @@ prettyExpression showLabel ppFun ppVar = pp id where
   pp _ (Fun f _ l)
     | showLabel = ppFun f PP.<> PP.text "@" PP.<> PP.int l
     | otherwise = ppFun f 
-  pp _ (Pair t1 t2) = ppTuple (pp id t1, pp id t2)
-  pp par (Apply t1 t2) =
+  pp _ (Pair _ t1 t2) = ppTuple (pp id t1, pp id t2)
+  pp par (Apply _ t1 t2) =
     par (pp id t1 PP.</> pp PP.parens t2)
-  pp par (LetP t1 ((x,_),(y,_)) t2) =
-    par (PP.align (PP.text "let" PP.<+> ppTuple (ppVar x, ppVar y) PP.<+> PP.text "=" PP.<+> pp id t1
-                    PP.<$> PP.hang 3 (PP.text "in" PP.<+> pp id t2)))
+  pp par (LetP _ t1 ((x,_),(y,_)) t2) =
+    par (PP.align (PP.text "let" PP.<+> ppTuple (ppVar x, ppVar y)
+                   PP.<+> PP.text "=" PP.<+> pp id t1
+                   PP.<$> PP.hang 3 (PP.text "in" PP.<+> pp id t2)))
 
 prettyEquation :: (f -> PP.Doc) -> (v -> PP.Doc) -> Equation f v tp -> PP.Doc
 prettyEquation ppFun ppVar eqn = pp False (lhs eqn) PP.<+> PP.text "=" PP.</> pp False (rhs eqn) where

@@ -9,6 +9,8 @@ build-type:            Simple
 cabal-version:         >=1.10
                        
 library
+  ghc-options:         -threaded -Wall -O2 -fno-warn-orphans
+        
   exposed-modules:
                        HoSA.Utils
                        HoSA.Ticking
@@ -50,7 +52,8 @@ library
                        TupleSections, 
                        TypeOperators,
                        PatternSynonyms,
-                       DeriveDataTypeable,                       
+                       DeriveDataTypeable,
+                       ScopedTypeVariables,
                        GADTs
 
 executable hosa

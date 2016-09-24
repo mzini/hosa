@@ -50,10 +50,8 @@ vars (Var (FVar v)) = [Left v]
 vars (MVar mv) = [Right mv]
 
 
-
 type SetConstraint = SetSolver.Inclusion Unique VarId
 
-  
 toSetConstraint :: [Constraint] -> [SetConstraint]
 toSetConstraint = concatMap f where
   f (l :>=: r) = [ toExp vr SetSolver.<=! SetSolver.setVariable v
@@ -75,7 +73,7 @@ toFOCS (SOCS cs ds) = do
     restrict u vs = vs \\ [ v' | NOccur v' (MetaVar u' _) <- ds, u == u']
     uniqueSym = Sym Nothing <$> unique
     
-    fromSolution SetSolver.EmptySet = Nothing
+    fromSolution SetSolver.EmptySet                 = Nothing
     fromSolution (SetSolver.ConstructedTerm c _ []) = Just c
   
     mvars = rights . concatMap (\ c -> vars (lhs c) ++ vars (rhs c))
@@ -84,14 +82,14 @@ toFOCS (SOCS cs ds) = do
 toGubsCS :: FOCS -> GubsCS
 toGubsCS = map gconstraint where
   gconstraint (l :>=: r) = gterm l GUBS.:>=: gterm r
-  gconstraint (l :=: r) = gterm l GUBS.:=: gterm r
-  gterm Zero = 0
-  gterm (Succ ix) = gterm ix + 1
-  gterm (Sum ixs) = sum [gterm ix | ix <- ixs]
+  gconstraint (l :=: r)  = gterm l GUBS.:=: gterm r
+  gterm Zero           = 0
+  gterm (Succ ix)      = gterm ix + 1
+  gterm (Sum ixs)      = sum [gterm ix | ix <- ixs]
   gterm (Var (FVar v)) =  GUBS.Var (V v)
-  gterm (Var (BVar v)) =  error "toCS: constraint list contains bound variable"
-  gterm (Fun f ixs) = GUBS.Fun f (gterm `map` ixs)
-  gterm (MVar mv) =
+  gterm (Var (BVar _)) =  error "toCS: constraint list contains bound variable"
+  gterm (Fun f ixs)    = GUBS.Fun f (gterm `map` ixs)
+  gterm (MVar mv)      =
     case unsafePeakVar mv of
       Left _ -> error "toCS: unset meta variable"
       Right t -> gterm t
@@ -106,9 +104,10 @@ interpretIx inter (Succ ix) = GUBS.constant 1 + interpretIx inter ix
 interpretIx inter (Fun f ixs) = GUBS.get' inter f `GUBS.apply` (interpretIx inter `map` ixs)
 
 interpretType :: (Eq c, Num c) => Interpretation c -> SizeType knd Term -> SizeType knd (Polynomial c)
-interpretType inter (SzBase bt ix) = SzBase bt (interpretIx inter ix)
-interpretType inter (SzPair t1 t2) = SzPair (interpretType inter t1) (interpretType inter t2)
-interpretType inter (SzArr n t) = SzArr (interpretType inter n) (interpretType inter t)
+interpretType _     (SzVar v)        = SzVar v
+interpretType inter (SzCon n ts ix)  = SzCon n (interpretType inter `map` ts) (interpretIx inter ix)
+interpretType inter (SzPair t1 t2)   = SzPair (interpretType inter t1) (interpretType inter t2)
+interpretType inter (SzArr n t)      = SzArr (interpretType inter n) (interpretType inter t)
 interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (interpretType inter t)
 
 interpretSig :: (Eq c, Num c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)

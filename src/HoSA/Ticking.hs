@@ -12,12 +12,9 @@ module HoSA.Ticking
   , TickedProgram)
 where
 
-import Control.Monad.Trans (lift)
 import Control.Monad.Writer
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Map as Map
-import Data.Maybe (catMaybes)
-
 import HoSA.Data.Expression
 import HoSA.Data.SimplyTypedProgram
 import HoSA.Utils
@@ -29,10 +26,9 @@ data TSymbol f = TSymbol f Int -- auxiliary symbols f_i
 
 instance IsSymbol f => IsSymbol (TSymbol f) where
   isDefined TSymbol{} = True
-  isDefined _ = False
+  isDefined _         = False
   
-data TVariable v = IdentV v
-               | Fresh Int
+data TVariable v = IdentV v | Fresh Int
   deriving (Eq, Ord)
 
 type TickedExpression f v = TypedExpression (TSymbol f) (TVariable v)
@@ -47,7 +43,7 @@ arity p = \ f -> arities Map.! f where
   arities = Map.mapWithKey ar (signature p)
   
   ar f tp | isConstructor f = tarity tp
-          | otherwise = darity f
+          | otherwise       = darity f
           
   darity f = maximum $ 0 : [ length args
                            | eq <- equations p
@@ -59,10 +55,10 @@ arity p = \ f -> arities Map.! f where
 ----------------------------------------------------------------------
 
 clockType :: SimpleType
-clockType = TyBase Clock
+clockType = TyCon "#" []
 
 tick :: TickedExpression f v -> TickedExpression f v
-tick t = Fun Tick (clockType :-> clockType) 0 `Apply` t
+tick t = Apply clockType (Fun Tick (clockType :-> clockType) 0) t
 
 -- ticking monad
 type TickM f a = WriterT [(TSymbol f,SimpleType)] (UniqueT UniqueM) a
@@ -75,9 +71,10 @@ freshLoc = uniqueToInt <$> lift unique
 
 -- types
 translatedType :: SimpleType -> SimpleType
-translatedType (TyBase b) = TyBase b
-translatedType (t1 :*: t2) = translatedType t1 :*: translatedType t2
-translatedType (t1 :-> t2) = translatedType t1 :-> clockType :-> (translatedType t2 :*: clockType)
+translatedType (TyVar v)    = TyVar v
+translatedType (TyCon n ts) = TyCon n (translatedType `map` ts)
+translatedType (t1 :*: t2)  = translatedType t1 :*: translatedType t2
+translatedType (t1 :-> t2)  = translatedType t1 :-> clockType :-> (translatedType t2 :*: clockType)
 
 auxType :: SimpleType -> Int -> SimpleType
 auxType tp 0 = clockType :-> (translatedType tp :*: clockType)
@@ -85,7 +82,7 @@ auxType (tp1 :-> tp2) i = translatedType tp1 :-> auxType tp2 (i - 1)
 
 constrType :: SimpleType -> SimpleType 
 constrType (t1 :-> t2) = translatedType t1 :-> constrType t2
-constrType (TyBase b) = TyBase b
+constrType (TyCon n ts) = TyCon n ts
 
 -- symbols and variables
 
@@ -117,25 +114,27 @@ constrFun f tp = do
   Fun f' tp' <$> freshLoc
 
 -- rules
-translateLhs :: ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
-translateLhs ar l t =  Apply <$> renameHead l <*> return t where
-  renameHead (sexpr -> (Fun f tpf _,rest)) = fromSexpr <$> hd' <*> rest' where
-    hd' = auxFun f tpf (length rest)
-    rest' = mapExpressionM (\ f tp _ -> constrSym f tp) (\ v tp -> pure (var v,tp)) `mapM` rest
+translateLhs :: Eq v => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateLhs ar l t =  apply <$> renameHead l <*> return t where
+  renameHead (sexpr -> (Fun f tpf _,rest)) = foldl apply <$> h <*> r where
+    h = auxFun f tpf (length rest)
+    r = mapExpressionM (\ g tp _ -> constrSym g tp) (\ v tp -> pure (var v,tp)) `mapM` rest
 
-translateRhs :: IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
-translateRhs ar e t = translateK e t (\ e' t' -> return (e' `Pair` tick t')) where
-  translateK (Var v tp) t k = k (Var (var v) tp) t
+translateRhs :: Eq v => IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
+  translateK (Var v tp) t k = k (Var (var v) (translatedType tp)) t
   translateK (Fun f tp _) t k | isConstructor f && ar f == 0 = constrFun f tp >>= flip k t
   translateK (Fun f tp _) t k = auxFun f tp 1 >>= flip k t
-  translateK (Apply e1 e2) t k = translateK e1 t k1 where
+  translateK (Pair _ e1 e2) t k = translateK e1 t k1 where
+    k1 e1' t1 = translateK e2 t1 (k2 e1')
+    k2 e1' e2' t2 = k (pair e1' e2') t2 --TODO
+  translateK (Apply _ e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
     k2 e1' e2' t2 = do
-      let (tp1 :-> tp2) = typeOf e1
+      let (_ :-> tp2) = typeOf e1
       ve <- freshVar
       vc <- freshVar
-      let te = translatedType tp2
-      LetP (Apply (Apply e1' e2') t2) ((ve,te),(vc,clockType)) <$> k (Var ve te) (Var vc clockType)
+      letp (apply (apply e1' e2') t2) (ve,vc) <$> k (Var ve (translatedType tp2)) (Var vc clockType)
 
 translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
 translateEnv t env = Map.insert t clockType $ Map.fromList [ (IdentV w, translatedType tp) | (w, tp) <- Map.toList env ]
@@ -163,9 +162,10 @@ auxiliaryEquations ar (f,tpf) = mapM (auxEquation tpf) [1 .. if isDefined f then
       fi' <- if i < arf then auxFun f tpf (i + 1) else constrFun f tpf
       let t = Var (Fresh (i+1)) clockType
           vs = take i vars
-          l = fromSexpr fi (vs ++ [t])
-          r = fromSexpr fi' vs `Pair` t
-      return TypedEquation { eqEnv = Map.fromList [ (v,tp) | Var v tp <- t : vs ]
+          fromSexp = foldl apply
+          l = fromSexp fi (vs ++ [t])
+          r = fromSexp fi' vs `pair` t
+      return TypedEquation { eqEnv = Map.fromList [ (v,tpv) | Var v tpv <- t : vs ]
                            , eqEqn = Equation l r 
                            , eqTpe = typeOf l }
 

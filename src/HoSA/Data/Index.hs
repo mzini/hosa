@@ -12,6 +12,7 @@ module HoSA.Data.Index (
   , ixSucc
   , ixSum
   , fvars
+  , bvars
   , metaVar
   , freshMetaVar
   , substituteMetaVar
@@ -106,15 +107,21 @@ unsafePeakVar (MetaVar u ref) =
     Nothing -> Left u
     Just ix -> Right ix
 
-fvars :: Term -> [VarId]
-fvars Zero = []
-fvars (Succ ix) = fvars ix
-fvars (Sum ixs) = concatMap fvars ixs
-fvars (Fun _ ixs) = concatMap fvars ixs
-fvars (Var (BVar _)) = []
-fvars (Var (FVar v)) = [v]
-fvars (MVar mv) = either err fvars (unsafePeakVar mv) where
+vars :: Term -> [Var]
+vars Zero = []
+vars (Succ ix) = vars ix
+vars (Sum ixs) = concatMap vars ixs
+vars (Fun _ ixs) = concatMap vars ixs
+vars (Var v) = [v]
+vars (MVar mv) = either err vars (unsafePeakVar mv) where
   err _ = error "HoSA.Index.fvars: free variables on terms with meta-variables cannot be determined"
+
+bvars :: Term -> [VarId]
+bvars t = [ v | BVar v <- vars t]
+
+fvars :: Term -> [VarId]
+fvars t = [ v | FVar v <- vars t]
+
 
 metaVars :: Term -> [MetaVar]
 metaVars Zero = []
@@ -122,7 +129,7 @@ metaVars (Succ ix) = metaVars ix
 metaVars (Sum ixs) = concatMap metaVars ixs
 metaVars (Fun _ ixs) = concatMap metaVars ixs
 metaVars (Var (BVar _)) = []
-metaVars (Var (FVar v)) = []
+metaVars (Var (FVar _)) = []
 metaVars (MVar mv) = [mv]
 
 
@@ -191,12 +198,12 @@ inst s = subst_ s' where
   
 instance Substitutable Term where
   type Image Term = Term
-  subst_ _ Zero = Zero
-  subst_ s (Succ ix) = Succ (subst_ s ix)
-  subst_ s (Sum ixs) = Sum (map (subst_ s) ixs)
+  subst_ _ Zero        = Zero
+  subst_ s (Succ ix)   = Succ (subst_ s ix)
+  subst_ s (Sum ixs)   = Sum (map (subst_ s) ixs)
   subst_ s (Fun f ixs) = Fun f (map (subst_ s) ixs)
-  subst_ s (Var v) = s v
-  subst_ s t@MVar{} = t
+  subst_ s (Var v)     = s v
+  subst_ _ t@MVar{}    = t
 
 instance Substitutable t => Substitutable [t] where
   type Image [t] = Image t
