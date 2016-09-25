@@ -3,6 +3,7 @@ module HoSA.Utils (
   -- * Uniques
   Unique
   , uniqueToInt
+  , uniqueFromInt
   , MonadUnique (..)
   , UniqueM    
   , UniqueT
@@ -80,10 +81,13 @@ renderPretty d = PP.displayS (PP.renderSmart 1.0 200 (PP.pretty d)) ""
 -- uniques
 ----------------------------------------------------------------------
 
-newtype Unique = Unique Int deriving (Eq, Ord, Show)
+newtype Unique = Unique Int deriving (Eq, Ord, Show, Enum)
 
 uniqueToInt :: Unique -> Int
 uniqueToInt (Unique i) = i
+
+uniqueFromInt :: Int -> Unique
+uniqueFromInt = Unique
 
 newtype UniqueT m a = UniqueT { runUniqueT_ :: StateT Unique m a }
                       deriving (Applicative, Functor, Monad, MonadIO)

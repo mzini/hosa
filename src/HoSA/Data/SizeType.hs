@@ -1,13 +1,19 @@
 module HoSA.Data.SizeType where
 
+import           Data.List (nub)
 import qualified Data.List as List
 import qualified Data.Map as Map
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import           HoSA.Utils
-import           Data.List (nub)
 import           Data.Maybe (fromJust)
-import           HoSA.Data.SimplyTypedProgram hiding (Signature)
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
+
 import qualified HoSA.Data.Index as Ix
+import           HoSA.Data.MLTypes hiding (Signature,rename)
+import           HoSA.Utils
+
+
+----------------------------------------------------------------------
+-- datatypes
+----------------------------------------------------------------------
 
 data Kind = T | S
 

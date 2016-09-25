@@ -1,13 +1,21 @@
-module HoSA.Data.CallSite where
+module HoSA.Data.Program.CallSite (
+  CtxSymbol (..)
+  , CSAbstract
+  , kca
+  , withCallContexts
+  , locations
+  )
+where
 
 import qualified Data.Map as M
 import           Data.Maybe (fromJust)
 import           Data.List (nub)
-import           HoSA.Data.Expression
-import           HoSA.Data.SimplyTypedProgram
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-type Ctx = [Location]
+import HoSA.Data.Program.Types
+import HoSA.Data.Program.Expression
+import HoSA.Data.Program.Equation
+import HoSA.Data.MLTypes
+import HoSA.Utils (uniqueFromInt)
 
 data CtxSymbol f = CtxSym { csSymbol   :: f
                           , csCallsite :: Location
@@ -20,20 +28,20 @@ instance IsSymbol f => IsSymbol (CtxSymbol f) where
   isDefined = isDefined . csSymbol
 
 initial :: f -> CtxSymbol f
-initial f = CtxSym f 0 Nothing
+initial f = CtxSym f (uniqueFromInt 0) Nothing
 
 locations :: CtxSymbol f -> [Location]
 locations f = csCallsite f : maybe [] locations (csContext f)
 
 cap :: Int -> CtxSymbol f -> CtxSymbol f
-cap 0 f = f { csCallsite = 0, csContext = Nothing }
+cap 0 f = initial (csSymbol f)
 cap 1 f = f { csContext = Nothing }
 cap i f = f { csContext = cap (i-1) <$> csContext f }
 
 
 kca :: Eq f => Int -> CSAbstract f
 kca n (f,tpf,l) g 
-    | firstOrder tpf = CtxSym f 0 Nothing
+    | firstOrder tpf = initial f
     | csSymbol g == f = g
     | otherwise = cap n (CtxSym f l (Just g))
   where
@@ -46,9 +54,9 @@ kca n (f,tpf,l) g
     dataType _            = False
   
 
-withCallContexts :: (Eq v, IsSymbol f, Eq f, Ord f) => CSAbstract f -> Maybe [f] -> TypedProgram f v -> TypedProgram (CtxSymbol f) v
+withCallContexts :: (Eq v, IsSymbol f, Eq f, Ord f) => CSAbstract f -> Maybe [f] -> Program f v -> Program (CtxSymbol f) v
 withCallContexts abstr startSymbols p =
-  walk [] [ (initial f, ident) | f <- M.keys (signature p), maybe True (elem f) startSymbols]
+  walk [] [ (initial f, identSubst) | f <- M.keys (signature p), maybe True (elem f) startSymbols]
   where
     defines f eq = fst (definedSymbol (eqEqn eq)) == (csSymbol f)
 
@@ -59,8 +67,8 @@ withCallContexts abstr startSymbols p =
       | otherwise       = abstr (g,tp,l) f
 
   
-    walk syms [] = TypedProgram { equations = concatMap definingEquation syms
-                                , signature = sig }
+    walk syms [] = Program { equations = concatMap definingEquation syms
+                           , signature = sig }
       where
         sig = M.fromList (ds ++ cs)
         ds = [ (f,substitute subst (gtypeOf f)) | (f,subst) <- syms ]
@@ -101,11 +109,3 @@ withCallContexts abstr startSymbols p =
         annotatedRhs = mapExpression fun var . rhs . eqEqn where
           fun g tp l = (push (g,tp,l) f, tp)
           var v  tp  = (v,tp)
-
--- -- pretty printing
-
-instance PP.Pretty f => PP.Pretty (CtxSymbol f) where
-  pretty (CtxSym f 0 Nothing) = PP.pretty f
-  pretty f = PP.pretty (csSymbol f) PP.<> PP.text "@" PP.<> loc where
-    loc = PP.hcat $ PP.punctuate (PP.text ".") (PP.int `map` locations f)
-

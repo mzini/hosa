@@ -1,32 +1,31 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module Main where
 
-import Data.Maybe (fromMaybe, mapMaybe, listToMaybe)
-import Data.Tree (drawForest, Forest)
-import System.Console.CmdArgs
-import Data.Typeable (Typeable)
-import Data.Traversable (traverse)
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import Control.Monad.Except
-import Control.Monad.Reader
-import Control.Monad (when, unless)
-import System.Exit
-
 import           Control.Arrow (first,second)
+import           Control.Monad (when, unless)
+import           Control.Monad.Except
+import           Control.Monad.Reader
+import           Data.Maybe (fromMaybe, mapMaybe, listToMaybe)
+import           Data.Traversable (traverse)
+import           Data.Tree (drawForest, Forest)
+import           Data.Typeable (Typeable)
+import           System.Console.CmdArgs
+import           System.Exit
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import           Data.List (nub)
+
 import           HoSA.Utils
 import           HoSA.Ticking
-import           HoSA.Data.Expression
-import           HoSA.Data.SimplyTypedProgram
-import qualified HoSA.Data.CallSite as C
+import           HoSA.Data.Program
+import           HoSA.Data.MLTypes
 import qualified HoSA.SizeType.Infer as I
 import qualified HoSA.Data.Index as Ix
 import qualified HoSA.SizeType.SOConstraint as SOCS
 import qualified HoSA.Data.SizeType as SzT
 import           HoSA.Data.SizeType (SizeType (..), Schema, Type)
-import GUBS hiding (Symbol, Variable, Var)
+import           GUBS hiding (Symbol, Variable, Var)
 
 deriving instance Typeable (SMTSolver)
 deriving instance Data (SMTSolver)
@@ -57,8 +56,8 @@ defaultConfig =
        , clength = 0 &= help "Length of call-site contexts." }
   &= help "Infer size-types for given ATRS"
 
-abstraction :: Eq f => HoSA -> C.CSAbstract f
-abstraction cfg = C.kca (clength cfg)
+abstraction :: Eq f => HoSA -> CSAbstract f
+abstraction cfg = kca (clength cfg)
 
 startSymbols :: HoSA -> Maybe [Symbol]
 startSymbols cfg = map sym <$> mains cfg where
@@ -253,9 +252,9 @@ status n e = liftIO (putDocLn (PP.text (n ++ ":") PP.<$> PP.indent 2 (PP.pretty 
 -- commands
 ----------------------------------------------------------------------
 
-readProgram :: RunM (TypedProgram Symbol Variable)
-readProgram = reader input >>= fromFile >>= assertRight ParseError >>= inferTypes where
-  inferTypes = assertRight SimpleTypeError . inferSimpleType initialEnv
+readProgram :: RunM (Program Symbol Variable)
+readProgram = reader input >>= fromFile >>= assertRight ParseError >>= inferMLTypes where
+  inferMLTypes = assertRight SimpleTypeError . inferTypes initialEnv
   -- TODO
   initialEnv = Map.fromList $ runUnique $ do
     v <- TyVar <$> unique
@@ -265,9 +264,9 @@ readProgram = reader input >>= fromFile >>= assertRight ParseError >>= inferType
            ]
   
 
-infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> TypedProgram f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
-infer sig p = generateConstraints p >>= solveConstraints where
-  generateConstraints p = do
+infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> Program f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
+infer sig p = generateConstraints >>= solveConstraints where
+  generateConstraints = do
     (res,l) <- lift (lift (I.generateConstraints sig p))
     putExecLog l
     assertRight SizeTypeError res
@@ -279,13 +278,12 @@ infer sig p = generateConstraints p >>= solveConstraints where
   
 
 timeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
-  TypedProgram f v -> RunM (SzT.Signature (TSymbol f) (SOCS.Polynomial Integer))
+  Program f v -> RunM (SzT.Signature (TSymbol f) (SOCS.Polynomial Integer))
 timeAnalysis p = do
   w <- reader width
   let (ticked,aux) = tickProgram p
   status "Instrumented Program" ticked
   status "Auxiliary Equations" aux
-  status "Abstract Signature" (abstractSignature w) -- TODO
   infer (abstractSignature w) ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
@@ -303,7 +301,7 @@ timeAnalysis p = do
           ar = arity p f
 
 sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
-  TypedProgram f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
+  Program f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
 sizeAnalysis p = do
   w <- reader width
   infer (abstractSignature w) p
@@ -318,7 +316,7 @@ main = do
     abstr <- reader abstraction
     p <- readProgram
     status "Input program" (PP.pretty p)    
-    let p' = C.withCallContexts abstr fs p
+    let p' = withCallContexts abstr fs p
     status "Calling-context annotated program" (PP.pretty p')
     analysis <- reader analyse
     case analysis of

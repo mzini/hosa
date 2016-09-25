@@ -14,9 +14,15 @@ library
   exposed-modules:
                        HoSA.Utils
                        HoSA.Ticking
-                       HoSA.Data.Expression
-                       HoSA.Data.SimplyTypedProgram
-                       HoSA.Data.CallSite
+                       HoSA.Data.MLTypes
+                       HoSA.Data.Program
+                       HoSA.Data.Program.Types
+                       HoSA.Data.Program.Expression
+                       HoSA.Data.Program.Equation                  
+                       HoSA.Data.Program.DMInfer
+                       HoSA.Data.Program.Pretty
+                       HoSA.Data.Program.Parse
+                       HoSA.Data.Program.CallSite
                        HoSA.Data.SizeType                  
                        HoSA.Data.Index
                        HoSA.SizeType.Infer

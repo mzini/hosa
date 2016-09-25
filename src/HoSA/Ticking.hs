@@ -12,12 +12,13 @@ module HoSA.Ticking
   , TickedProgram)
 where
 
-import Control.Monad.Writer
+import           Control.Monad.Writer
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Map as Map
-import HoSA.Data.Expression
-import HoSA.Data.SimplyTypedProgram
-import HoSA.Utils
+
+import           HoSA.Data.MLTypes
+import           HoSA.Data.Program
+import           HoSA.Utils
 
 data TSymbol f = TSymbol f Int -- auxiliary symbols f_i
              | TConstr f -- constructors
@@ -33,11 +34,11 @@ data TVariable v = IdentV v | Fresh Int
 
 type TickedExpression f v = TypedExpression (TSymbol f) (TVariable v)
 type TickedEquation f v = TypedEquation (TSymbol f) (TVariable v)
-type TickedProgram f v = TypedProgram (TSymbol f) (TVariable v)
+type TickedProgram f v = Program (TSymbol f) (TVariable v)
 
 type ArityDecl f = f -> Int
 
-arity :: (Eq f, IsSymbol f, Ord f) => TypedProgram f v -> ArityDecl f
+arity :: (Eq f, IsSymbol f, Ord f) => Program f v -> ArityDecl f
 arity p = \ f -> arities Map.! f where
   
   arities = Map.mapWithKey ar (signature p)
@@ -58,7 +59,7 @@ clockType :: SimpleType
 clockType = TyCon "#" []
 
 tick :: TickedExpression f v -> TickedExpression f v
-tick t = Apply clockType (Fun Tick (clockType :-> clockType) 0) t
+tick t = Apply clockType (Fun Tick (clockType :-> clockType) emptyLoc) t
 
 -- ticking monad
 type TickM f a = WriterT [(TSymbol f,SimpleType)] (UniqueT UniqueM) a
@@ -67,7 +68,7 @@ runTick :: TickM f a -> (a, [(TSymbol f,SimpleType)])
 runTick = runUnique . runUniqueT . runWriterT
 
 freshLoc :: TickM f Location
-freshLoc = uniqueToInt <$> lift unique
+freshLoc = lift unique
 
 -- types
 translatedType :: SimpleType -> SimpleType
@@ -151,13 +152,13 @@ translateEquation ar TypedEquation {..} = do
 
 auxiliaryEquations :: (IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
                                                                           
-auxiliaryEquations ar (f,tpf) = mapM (auxEquation tpf) [1 .. if isDefined f then arf - 1 else arf] where
+auxiliaryEquations ar (f,tpf) = mapM auxEquation [1 .. if isDefined f then arf - 1 else arf] where
     arf = ar f
     vars = walk 1 tpf where
     walk i (tp1 :-> tp2) = (Var (Fresh i) (translatedType tp1)) : walk (i+1) tp2
     walk _ _ = []
 
-    auxEquation tp i = do
+    auxEquation i = do
       fi <- auxFun f tpf i
       fi' <- if i < arf then auxFun f tpf (i + 1) else constrFun f tpf
       let t = Var (Fresh (i+1)) clockType
@@ -169,9 +170,9 @@ auxiliaryEquations ar (f,tpf) = mapM (auxEquation tpf) [1 .. if isDefined f then
                            , eqEqn = Equation l r 
                            , eqTpe = typeOf l }
 
-tickProgram :: (Ord v, IsSymbol f, Ord f) => TypedProgram f v -> (TickedProgram f v, TickedProgram f v)
-tickProgram p = ( TypedProgram { equations = eqs, signature = Map.fromList fs }
-                , TypedProgram { equations = aeqs, signature = Map.fromList afs })
+tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, TickedProgram f v)
+tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs }
+                , Program { equations = aeqs, signature = Map.fromList afs })
   where
     (eqs,fs) = runTick $ translateEquation (arity p) `mapM` equations p
     (aeqs,afs) = runTick $ auxiliaryEquations (arity p) `concatMapM` (Map.toList (signature p))

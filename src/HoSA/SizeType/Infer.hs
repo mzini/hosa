@@ -4,31 +4,28 @@ import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.Trace
 import           Control.Monad.Writer
-import           Data.Maybe (fromJust)
-import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Tree
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           HoSA.Utils
-import           HoSA.Data.Expression
-import           HoSA.Data.SimplyTypedProgram hiding (Signature)
+import           HoSA.Data.Program
+import           HoSA.Data.MLTypes hiding (Signature,rename)
 import           HoSA.Data.Index (Constraint(..))
 import qualified HoSA.Data.Index as Ix
 import           HoSA.Data.SizeType
 import           HoSA.SizeType.SOConstraint (SOCS (..))
-import           Debug.Trace (traceShow)
 
 
 --------------------------------------------------------------------------------
 -- common types
 --------------------------------------------------------------------------------
 
-type TypingContext v = Map v (Either (Type Ix.Term) (Schema Ix.Term))
+type TypingContext v = Map.Map v (Either (Type Ix.Term) (Schema Ix.Term))
 
 type SizeTypedExpression f v = TypedExpression (f,Schema Ix.Term) v 
 
-data Footprint v = FP (Map v (Schema Ix.Term)) (Type Ix.Term)
+data Footprint v = FP (Map.Map v (Schema Ix.Term)) (Type Ix.Term)
 
 data Obligation f v = TypingContext v :- (SizeTypedExpression f v,Type Ix.Term)
 infixl 0 :-
@@ -40,15 +37,15 @@ infixl 0 :-
 type ExecutionLog = Forest String
 
 newtype InferM f v a =
-  InferM { runInferM_ :: ReaderT (Map f SimpleType) (ExceptT (SzTypingError f v) (TraceT String (UniqueT IO))) a }
+  InferM { runInferM_ :: ReaderT (Map.Map f SimpleType) (ExceptT (SzTypingError f v) (TraceT String (UniqueT IO))) a }
   deriving (Applicative, Functor, Monad
             , MonadTrace String
             , MonadError (SzTypingError f v)
-            , MonadReader (Map f SimpleType)
+            , MonadReader (Map.Map f SimpleType)
             , MonadUnique
             , MonadIO)
 
-runInferM :: Map f SimpleType -> InferM f v a -> UniqueT IO (Either (SzTypingError f v) a, ExecutionLog)
+runInferM :: Map.Map f SimpleType -> InferM f v a -> UniqueT IO (Either (SzTypingError f v) a, ExecutionLog)
 runInferM sig = runTraceT . runExceptT . flip runReaderT sig . runInferM_
   
 newtype InferCG f v a = InferCG { runInferCG_ :: WriterT (SOCS) (InferM f v) a }
@@ -65,7 +62,7 @@ execInferCG = execWriterT . runInferCG_
 liftInferM ::InferM f v a -> InferCG f v a
 liftInferM = InferCG . lift
 
-simpleSignature :: InferCG f v (Map f SimpleType)
+simpleSignature :: InferCG f v (Map.Map f SimpleType)
 simpleSignature = liftInferM ask
 
   -- notOccur vs `mapM` Ix.metaVars t2
@@ -94,9 +91,6 @@ logMsg = trace . renderPretty
 
 logBlk :: MonadTrace String m => PP.Pretty e => e -> m a -> m a
 logBlk = scopeTrace . renderPretty
-
--- logBlk e m = traceShow d (scopeTrace d m) where
---   d = renderPretty e
 
 -- errors
 --------------------------------------------------------------------------------
@@ -212,7 +206,7 @@ footprint l = logBlk "Footprint" $ fpInfer l
       return (si1 ++ si2, st1 ++ st2)
     fpMatch s          n                     = throwError (MatchFailure s n)
 
-obligations :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => Signature f Ix.Term -> TypedProgram f v -> InferM f v [Obligation f v]
+obligations :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => Signature f Ix.Term -> Program f v -> InferM f v [Obligation f v]
 obligations sig p = mapM obligationsFor (eqEqn `map` equations p) where
   obligationsFor eq = do
     FP ctx tp <- footprint (annotate (lhs eq))
@@ -247,7 +241,7 @@ SzVar v  `subtypeOf_` t = return [ (v, toSchema t) ]
 t `subtypeOf_` SzVar v = return [ (v, toSchema t) ]
 SzCon n ts1 ix1 `subtypeOf_` SzCon m ts2 ix2 | n == m = do
   require (ix2 :>=: ix1)
-  sig <- simpleSignature
+  sig <- Map.filterWithKey (\ f _ -> isConstructor f) <$> simpleSignature
   let l = zip (variant sig n ts1) (variant sig n ts2)
           ++ zip (contraVariant sig n ts2) (contraVariant sig n ts1)
   foldM (\ subst (s1,s2) -> do
@@ -328,7 +322,7 @@ obligationToConstraints ob@(ctx :- (t, tp)) =  logBlk ob $ execInferCG $ do
   void (tp' `subtypeOf` tp) -- TODO
 
 generateConstraints :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
-  Signature f Ix.Term -> TypedProgram f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
+  Signature f Ix.Term -> Program f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
 generateConstraints sig p = runInferM (signature p) $ do
   logBlk "Orientation constraints" $ 
     obligations sig p >>= concatMapM obligationToConstraints
