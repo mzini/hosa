@@ -96,12 +96,16 @@ toGubsCS = map gconstraint where
 
 
 -- interpretation
+-- TODO 
 interpretIx :: (Eq c, Num c) => Interpretation c -> Term -> Polynomial c
 interpretIx _ Zero = GUBS.constant 0
 interpretIx _ (Var v) = GUBS.variable v
 interpretIx inter (Sum ixs) = sum (interpretIx inter `map` ixs)
 interpretIx inter (Succ ix) = GUBS.constant 1 + interpretIx inter ix
-interpretIx inter (Fun f ixs) = GUBS.get' inter f `GUBS.apply` (interpretIx inter `map` ixs)
+interpretIx inter (Fun f ixs) = p `GUBS.apply` (interpretIx inter `map` ixs) where
+  p = case GUBS.get inter f of
+        Just p' -> p'
+        Nothing -> fromInteger 0
 
 interpretType :: (Eq c, Num c) => Interpretation c -> SizeType knd Term -> SizeType knd (Polynomial c)
 interpretType _     (SzVar v)        = SzVar v

@@ -7,7 +7,7 @@ import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Data.Maybe (fromMaybe, mapMaybe, listToMaybe)
 import           Data.Traversable (traverse)
-import           Data.Tree (drawForest, Forest)
+import           Data.Tree (drawForest, Forest, Tree (..))
 import           Data.Typeable (Typeable)
 import           System.Console.CmdArgs
 import           System.Exit
@@ -240,15 +240,20 @@ instance PP.Pretty Error where
 
 type RunM = ExceptT Error (ReaderT HoSA (UniqueT IO))
 
-putExecLog :: Forest String -> RunM ()
+putExecLog :: PP.Pretty d => Forest d -> RunM ()
 putExecLog l = do 
    v <- reader verbose
-   when v (liftIO (putStrLn (drawForest l))) 
-
+   when v (liftIO (putDocLn (ppForest l)))
 
 status :: PP.Pretty e => String -> e -> RunM ()
 status n e = liftIO (putDocLn (PP.text (n ++ ":") PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
 
+ppForest :: PP.Pretty p => Forest p -> PP.Doc
+ppForest ts = PP.vcat [PP.text "+" PP.<+> ppTree t | t <- ts]
+
+ppTree :: PP.Pretty p => Tree p -> PP.Doc
+ppTree (Node n ts) = PP.group (PP.pretty n) PP.<$$> PP.text "" PP.<$$> PP.indent 2 (ppForest ts)
+                               
 -- commands
 ----------------------------------------------------------------------
 
@@ -270,8 +275,8 @@ infer sig p = generateConstraints >>= solveConstraints where
     (res,l) <- lift (lift (I.generateConstraints sig p))
     putExecLog l
     assertRight SizeTypeError res
-  solveConstraints cs = do 
-    p <- reader constraintProcessor  
+  solveConstraints cs = do
+    p <- reader constraintProcessor
     (msig,l) <- lift (lift (SOCS.solveConstraints p sig cs))
     putExecLog l
     assertJust ConstraintUnsolvable msig
@@ -282,9 +287,11 @@ timeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
 timeAnalysis p = do
   w <- reader width
   let (ticked,aux) = tickProgram p
-  status "Instrumented Program" ticked
-  status "Auxiliary Equations" aux
-  infer (abstractSignature w) ticked
+  status "Instrumented program" ticked
+  status "Auxiliary equations" aux
+  let sig = abstractSignature w -- TODO
+  status "Abstract signature" sig 
+  infer sig ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
     tickSchema = SzQArr [1] (SzCon "#" [] (Ix.bvar 1)) (SzCon "#" [] (Ix.Succ (Ix.bvar 1)))

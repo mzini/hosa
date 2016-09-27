@@ -4,10 +4,11 @@ module HoSA.Data.Program.CallSite (
   , kca
   , withCallContexts
   , locations
+  , initial
   )
 where
 
-import qualified Data.Map as M
+import qualified Data.Map as Map
 import           Data.Maybe (fromJust)
 import           Data.List (nub)
 
@@ -56,11 +57,11 @@ kca n (f,tpf,l) g
 
 withCallContexts :: (Eq v, IsSymbol f, Eq f, Ord f) => CSAbstract f -> Maybe [f] -> Program f v -> Program (CtxSymbol f) v
 withCallContexts abstr startSymbols p =
-  walk [] [ (initial f, identSubst) | f <- M.keys (signature p), maybe True (elem f) startSymbols]
+  walk [] [ (initial f, identSubst) | f <- Map.keys (signature p), maybe True (elem f) startSymbols]
   where
     defines f eq = fst (definedSymbol (eqEqn eq)) == (csSymbol f)
 
-    gtypeOf f = signature p M.! csSymbol f
+    gtypeOf f = signature p Map.! csSymbol f
       
     push (g,tp,l) f
       | isConstructor g = initial g
@@ -70,9 +71,9 @@ withCallContexts abstr startSymbols p =
     walk syms [] = Program { equations = concatMap definingEquation syms
                            , signature = sig }
       where
-        sig = M.fromList (ds ++ cs)
-        ds = [ (f,substitute subst (gtypeOf f)) | (f,subst) <- syms ]
-        cs = [ (initial c, tp) | (c,tp) <- M.toList (signature p), isConstructor c ]
+        sig = Map.fromList (ds ++ cs)
+        ds = [ (f,substitute subst (gtypeOf f)) | (f,subst) <- syms, isDefined f ]
+        cs = [ (initial c, tp) | (c,tp) <- Map.toList (signature p), isConstructor c ]
     walk seen (f:fs) =
       case ins f seen of
         Nothing -> walk seen fs
@@ -80,7 +81,7 @@ withCallContexts abstr startSymbols p =
       
     succs (f, subst) = [ (push (f',tp,l) f, fromJust (matchType tp tp'))
                        | (f',tp',l) <- foldl (flip tfunsDL) [] bodies
-                       , let tp = signature p M.! f']
+                       , let tp = signature p Map.! f']
       where
         bodies = [ substitute subst (rhs (eqEqn eq))| eq <- equations p, defines f eq ]
       

@@ -34,7 +34,7 @@ instance PP.Pretty Variable where
   pretty = PP.text . varName
 
 instance PP.Pretty f => PP.Pretty (CtxSymbol f) where
-  -- pretty (CtxSym f 0 Nothing) = PP.pretty f
+  pretty (CtxSym f u Nothing) | uniqueToInt u == 0 = PP.pretty f
   pretty f = PP.pretty (csSymbol f) PP.<> PP.text "@" PP.<> loc where
     loc = PP.hcat $ PP.punctuate (PP.text ".") (ppLoc `map` locations f)
     ppLoc = PP.int . uniqueToInt

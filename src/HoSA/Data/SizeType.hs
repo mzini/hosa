@@ -119,14 +119,14 @@ prettyType = ppTpe id
   where
     ppTpe :: (PP.Doc -> PP.Doc) -> (ix -> PP.Doc) -> SizeType knd ix -> PP.Doc
     ppTpe _ _   (SzVar v)          = PP.pretty v
-    ppTpe _ pix (SzCon n [] ix)    = PP.text n PP.<> PP.brackets (pix ix)
+    ppTpe _ pix (SzCon n [] ix)    = PP.group (PP.text n PP.<> PP.brackets (pix ix))
     ppTpe _ pix (SzCon n ts ix)    =
       PP.text n PP.<> PP.brackets (pix ix) PP.<> PP.tupled [ppTpe id pix t | t <- ts]
     ppTpe par pix (SzArr n t)      =      
-      par (PP.hang 2 $ ppTpe PP.parens pix n PP.<+> PP.text "->" PP.</> ppTpe id pix t)
-    ppTpe _ pix (SzPair t1 t2)   =
-      PP.parens (ppTpe id pix t1 PP.<//> PP.text ","  PP.<+> ppTpe id pix t2)
-    ppTpe par pix (SzQArr qvs n t) = par (PP.hang 2 $ ppQual qvs PP.</> ppTpe id pix (SzArr n t)) where
+      par (PP.nest 2 (PP.group (ppTpe PP.parens pix n
+                     PP.<> PP.line PP.<> PP.text "->" PP.</> ppTpe id pix t)))
+    ppTpe _ pix (SzPair t1 t2)   = PP.tupled [ppTpe id pix t1, ppTpe id pix t2]
+    ppTpe par pix (SzQArr qvs n t) = par (PP.nest 2 (PP.group (ppQual qvs PP.<> ppTpe id pix (SzArr n t)))) where
         ppQual [] = PP.empty
         ppQual vs = PP.text "∀" PP.<+> ppSeq PP.space [ PP.pretty (Ix.BVar v) | v <- vs] PP.<> PP.text "."
 

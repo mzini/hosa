@@ -34,12 +34,12 @@ infixl 0 :-
 -- inference monad
 --------------------------------------------------------------------------------
 
-type ExecutionLog = Forest String
+type ExecutionLog = Forest PP.Doc
 
 newtype InferM f v a =
-  InferM { runInferM_ :: ReaderT (Map.Map f SimpleType) (ExceptT (SzTypingError f v) (TraceT String (UniqueT IO))) a }
+  InferM { runInferM_ :: ReaderT (Map.Map f SimpleType) (ExceptT (SzTypingError f v) (TraceT PP.Doc (UniqueT IO))) a }
   deriving (Applicative, Functor, Monad
-            , MonadTrace String
+            , MonadTrace PP.Doc
             , MonadError (SzTypingError f v)
             , MonadReader (Map.Map f SimpleType)
             , MonadUnique
@@ -53,7 +53,7 @@ newtype InferCG f v a = InferCG { runInferCG_ :: WriterT (SOCS) (InferM f v) a }
             , MonadError (SzTypingError f v)
             , MonadWriter SOCS
             , MonadUnique
-            , MonadTrace String
+            , MonadTrace PP.Doc
             , MonadIO)
 
 execInferCG ::InferCG f v a -> InferM f v SOCS
@@ -86,11 +86,11 @@ require cs = do
 uniqueVar :: MonadUnique m => m Ix.VarId
 uniqueVar = uniqueToInt <$> unique
 
-logMsg :: MonadTrace String m => PP.Pretty e => e -> m ()
-logMsg = trace . renderPretty
+logMsg :: MonadTrace PP.Doc m => PP.Pretty e => e -> m ()
+logMsg = trace . PP.pretty
 
-logBlk :: MonadTrace String m => PP.Pretty e => e -> m a -> m a
-logBlk = scopeTrace . renderPretty
+logBlk :: MonadTrace PP.Doc m => PP.Pretty e => e -> m a -> m a
+logBlk = scopeTrace . PP.pretty
 
 -- errors
 --------------------------------------------------------------------------------
@@ -153,7 +153,7 @@ instance TSubstitute (Schema Ix.Term) where
       Just s' -> return s'
   substituteTyVars subst (SzCon n ts ix)  = SzCon n <$> mapM (substituteTyVars subst) ts <*> return ix
   substituteTyVars subst (SzQArr ixs n p) = do
-    ixs' <- sequence [uniqueVar | _ <- ixs]
+    ixs' <- sequence [ uniqueVar | _ <- ixs]
     let ixsubst = Ix.substFromList (zip ixs (Ix.bvar `map` ixs'))
     n' <- substituteTyVars subst (ixsubst `Ix.inst` n)
     p' <- substituteTyVars subst (ixsubst `Ix.inst` p)
@@ -165,11 +165,11 @@ instance TSubstitute (TypingContext v) where
     f (Left t) = Left <$> substituteTyVars subst t
     f (Right t) = Right <$> substituteTyVars subst t
   
-logObligation :: MonadTrace String m => (PP.Pretty f, PP.Pretty v) => Obligation f v -> m ()
-logObligation = logMsg . PP.pretty
+logObligation :: MonadTrace PP.Doc m => (PP.Pretty f, PP.Pretty v) => Obligation f v -> m ()
+logObligation = logMsg
 
 footprint :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SizeTypedExpression f v -> InferM f v (Footprint v)
-footprint l = logBlk "Footprint" $ fpInfer l
+footprint l = logBlk (PP.text "Footprint of" PP.<+> PP.pretty l) $ fpInfer l
   where
     fpInfer t = do
       fp@(FP ctx tp) <- fpInfer_ t
@@ -190,7 +190,9 @@ footprint l = logBlk "Footprint" $ fpInfer l
         SzArr n p -> do
           (si,st) <- fpMatch n tp2
           ctx1' <- mapM (substituteTyVars st) ctx1
-          return (FP (ctx1' `Map.union` ctx2) (Ix.substFromList si `Ix.o` p)) 
+          ctx2' <- mapM (substituteTyVars st) ctx2
+          tp <- Ix.o (Ix.substFromList si)  <$> substituteTyVars st p
+          return (FP (ctx1' `Map.union` ctx2') tp) 
         _ -> throwError (IlltypedTerm t1 "function type" tp1)        
     fpInfer_ _ = throwError (IllformedLhs l)
 
@@ -311,7 +313,7 @@ inferSizeType ctx t@(LetP _ t1 ((x,_),(y,_)) t2) =
                       Nothing -> Map.delete v c
                       Just tp -> Map.insert v tp c
       (ctx2,tp) <- inferSizeType ctx1' t2
-      let ctx2' = adj x (adj y ctx2')
+      let ctx2' = adj x (adj y ctx2)
       logObligation (ctx2' :- (t2,tp))
       return (ctx2,tp)
     _ -> throwError (IlltypedTerm t1 "pair type" tp1)
@@ -337,16 +339,16 @@ generateConstraints sig p = runInferM (signature p) $ do
 --------------------------------------------------------------------------------
 
 instance PP.Pretty v => PP.Pretty (TypingContext v) where
-  pretty m
+  pretty m 
     | Map.null m = PP.text "Ø"
-    | otherwise = PP.hcat $ PP.punctuate (PP.text ", ")
-      [ PP.pretty v PP.<+> PP.text ":" PP.<+> either PP.pretty PP.pretty e | (v,e) <- Map.toList m ]
+    | otherwise = PP.encloseSep PP.empty PP.empty (PP.text ", ") bindings where
+        bindings = [ PP.pretty v PP.<+> PP.text ":" PP.<+> either PP.pretty PP.pretty e | (v,e) <- Map.toList m ]
   
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Obligation f v) where
-  pretty (ctx :- (t, s)) =
-    PP.pretty ctx
-    PP.<+> PP.text "⊦" PP.<+> PP.pretty t
-    PP.<+> PP.text ":" PP.<+> PP.pretty s
+  pretty (ctx :- (t, s)) = 
+    PP.group (PP.nest 2 (PP.pretty ctx PP.<+> PP.text "⊦" 
+                         PP.<$> PP.nest 2 (PP.group (PP.pretty t PP.<+> PP.text ":"
+                                                     PP.<$> PP.pretty s))))
 
 instance {-# OVERLAPPING #-} PP.Pretty TSubst where
   pretty [] = PP.text "Ø"
@@ -356,5 +358,5 @@ instance {-# OVERLAPPING #-} (PP.Pretty f) => PP.Pretty (f,Schema ix) where
   pretty (f,_) = PP.pretty f
   
 instance PP.Pretty v => PP.Pretty (Footprint v) where
-  pretty (FP ctx tp) =
-    PP.parens (PP.pretty ctx PP.<> PP.comma PP.<+> PP.pretty tp)
+  pretty (FP ctx tp) = 
+    PP.parens (PP.tupled [PP.pretty ctx,PP.pretty tp])

@@ -13,6 +13,7 @@ module HoSA.Ticking
 where
 
 import           Control.Monad.Writer
+import           Control.Monad.Reader
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Map as Map
 
@@ -62,10 +63,10 @@ tick :: TickedExpression f v -> TickedExpression f v
 tick t = Apply clockType (Fun Tick (clockType :-> clockType) emptyLoc) t
 
 -- ticking monad
-type TickM f a = WriterT [(TSymbol f,SimpleType)] (UniqueT UniqueM) a
+type TickM f a = WriterT [(TSymbol f,SimpleType)] (ReaderT (Signature f) (UniqueT UniqueM)) a
 
-runTick :: TickM f a -> (a, [(TSymbol f,SimpleType)])
-runTick = runUnique . runUniqueT . runWriterT
+runTick :: Signature f -> TickM f a -> (a, [(TSymbol f,SimpleType)])
+runTick sig = runUnique . runUniqueT . flip runReaderT sig . runWriterT
 
 freshLoc :: TickM f Location
 freshLoc = lift unique
@@ -96,36 +97,38 @@ var = IdentV
 resetFreshVar :: TickM f ()
 resetFreshVar = reset
 
+lookupType :: Ord f => f -> TickM f SimpleType
+lookupType f = (Map.! f) <$> lift ask
 
-auxFun :: f -> SimpleType -> Int -> TickM f (TickedExpression f v)
-auxFun f tp i = tell [(f',tp')] >> (Fun f' tp' <$> freshLoc)
-  where
-    tp' = auxType tp i
-    f' = TSymbol f i    
+auxFun :: Ord f => f -> Int -> TickM f (TickedExpression f v)
+auxFun f i = do
+  tp <- flip auxType i <$> lookupType f
+  tell [(TSymbol f i,tp)]
+  Fun (TSymbol f i) tp <$> freshLoc
 
-constrSym :: f -> SimpleType -> TickM f (TSymbol f, SimpleType)
-constrSym f tp = tell [(f',tp')] >> return (f',tp')
-  where
-    tp' = constrType tp
-    f'  = TConstr f
+constrSym :: Ord f => f -> TickM f (TSymbol f, SimpleType)
+constrSym f = do
+  tp <- constrType <$> lookupType f
+  tell [(TConstr f,tp)]
+  return (TConstr f,tp)
 
-constrFun :: f -> SimpleType -> TickM f (TickedExpression f v)
-constrFun f tp = do
-  (f',tp') <- constrSym f tp
+constrFun :: Ord f => f -> TickM f (TickedExpression f v)
+constrFun f = do
+  (f',tp') <- constrSym f
   Fun f' tp' <$> freshLoc
 
 -- rules
-translateLhs :: Eq v => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateLhs :: (Ord f, Eq v) => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateLhs ar l t =  apply <$> renameHead l <*> return t where
-  renameHead (sexpr -> (Fun f tpf _,rest)) = foldl apply <$> h <*> r where
-    h = auxFun f tpf (length rest)
-    r = mapExpressionM (\ g tp _ -> constrSym g tp) (\ v tp -> pure (var v,tp)) `mapM` rest
+  renameHead (sexpr -> (Fun f _ _,rest)) = foldl apply <$> h <*> r where
+    h = auxFun f (length rest)
+    r = mapExpressionM (\ g _  _ -> constrSym g) (\ v tp -> pure (var v,tp)) `mapM` rest
 
-translateRhs :: Eq v => IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateRhs :: (Ord f, Eq v) => IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
   translateK (Var v tp) t k = k (Var (var v) (translatedType tp)) t
-  translateK (Fun f tp _) t k | isConstructor f && ar f == 0 = constrFun f tp >>= flip k t
-  translateK (Fun f tp _) t k = auxFun f tp 1 >>= flip k t
+  translateK (Fun f _ _) t k | isConstructor f && ar f == 0 = constrFun f >>= flip k t
+  translateK (Fun f _ _) t k = auxFun f 1 >>= flip k t
   translateK (Pair _ e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
     k2 e1' e2' t2 = k (pair e1' e2') t2 --TODO
@@ -140,7 +143,7 @@ translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t'
 translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
 translateEnv t env = Map.insert t clockType $ Map.fromList [ (IdentV w, translatedType tp) | (w, tp) <- Map.toList env ]
 
-translateEquation :: (Ord v, IsSymbol f) => ArityDecl f -> TypedEquation f v -> TickM f (TickedEquation f v)
+translateEquation :: (Ord f, Ord v, IsSymbol f) => ArityDecl f -> TypedEquation f v -> TickM f (TickedEquation f v)
 translateEquation ar TypedEquation {..} = do
   resetFreshVar
   t <- freshVar
@@ -148,9 +151,9 @@ translateEquation ar TypedEquation {..} = do
   r' <- translateRhs ar (rhs eqEqn) (Var t clockType)
   return TypedEquation { eqEnv = translateEnv t eqEnv
                        , eqEqn = Equation l' r'
-                       , eqTpe = translatedType eqTpe :*: clockType}
+                       , eqTpe = translatedType eqTpe :*: clockType }
 
-auxiliaryEquations :: (IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
+auxiliaryEquations :: (Ord f, IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
                                                                           
 auxiliaryEquations ar (f,tpf) = mapM auxEquation [1 .. if isDefined f then arf - 1 else arf] where
     arf = ar f
@@ -159,8 +162,8 @@ auxiliaryEquations ar (f,tpf) = mapM auxEquation [1 .. if isDefined f then arf -
     walk _ _ = []
 
     auxEquation i = do
-      fi <- auxFun f tpf i
-      fi' <- if i < arf then auxFun f tpf (i + 1) else constrFun f tpf
+      fi <- auxFun f i
+      fi' <- if i < arf then auxFun f (i + 1) else constrFun f
       let t = Var (Fresh (i+1)) clockType
           vs = take i vars
           fromSexp = foldl apply
@@ -174,8 +177,9 @@ tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, 
 tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs }
                 , Program { equations = aeqs, signature = Map.fromList afs })
   where
-    (eqs,fs) = runTick $ translateEquation (arity p) `mapM` equations p
-    (aeqs,afs) = runTick $ auxiliaryEquations (arity p) `concatMapM` (Map.toList (signature p))
+    sig = signature p
+    (eqs,fs) = runTick sig $ translateEquation (arity p) `mapM` equations p
+    (aeqs,afs) = runTick sig $ auxiliaryEquations (arity p) `concatMapM` (Map.toList sig)
          -- ++ auxEquations ar `concatMap` signatureToDecls (statrsSignature statrs)
 
 -- ntickATRS :: STAtrs Symbol Variable -> TickedAtrs
