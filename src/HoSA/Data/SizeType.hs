@@ -99,8 +99,8 @@ instance Ix.Substitutable (SizeType knd Ix.Term) where
 fvarsIx :: SizeType knd Ix.Term -> [Ix.VarId]
 fvarsIx = foldr (\ ix vs -> Ix.fvars ix `List.union` vs) []
 
-bvarsIx :: SizeType knd Ix.Term -> [Ix.VarId]
-bvarsIx = foldr (\ ix vs -> Ix.bvars ix `List.union` vs) []
+-- bvarsIx :: SizeType knd Ix.Term -> [Ix.VarId]
+-- bvarsIx = foldr (\ ix vs -> Ix.bvars ix `List.union` vs) []
 
 tvars :: SizeType knd ix -> [TypeVariable]
 tvars (SzVar v)      = [v]

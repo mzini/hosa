@@ -299,7 +299,7 @@ inferSizeType ctx t@(Apply _ t1 t2) =
       subst <- tp2 `subtypeOf` tArg
       ctx2' <- substituteTyVars subst ctx2
       tBdy' <- substituteTyVars subst tBdy
-      logObligation (ctx2' :- (t,tBdy))
+      logObligation (ctx2' :- (t,tBdy'))
       return (ctx2',tBdy')
     _ -> throwError (IlltypedTerm t1 "function type" tp1)
 inferSizeType ctx t@(LetP _ t1 ((x,_),(y,_)) t2) =
@@ -326,8 +326,8 @@ obligationToConstraints ob@(ctx :- (t, tp)) =  logBlk ob $ execInferCG $ do
 generateConstraints :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Signature f Ix.Term -> Program f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
 generateConstraints sig p = runInferM (signature p) $ do
-  logBlk "Orientation constraints" $ 
-    obligations sig p >>= concatMapM obligationToConstraints
+  logBlk "Orientation constraints"
+    (obligations sig p >>= concatMapM obligationToConstraints)
   -- ccs <- logBlk "Constructor constraints" $ execInferCG $ 
   --   forM_ (Map.toList sig) $ \ (f,s) -> 
   --       unless (isDefined f) $ do

@@ -67,7 +67,7 @@ constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
     Simple -> logCS ==> try simplify ==> logCS ==> simple
-    SCC -> logCS ==> try simplify ==> logCS ==> try (exhaustive (sccDecompose (try simplify ==> simple)))
+    SCC -> logCS ==> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple)))
   where
     logCS cs = logOpenConstraints cs >> return (Progress cs)
     logStr str cs = logMsg str >> return (Progress cs)
@@ -79,7 +79,7 @@ constraintProcessor cfg =
       ==> logStr "SMT: trying strongly multmixed interpretation"            
       ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 1})
       ==> logStr "SMT: trying multmixed interpretation"            
-      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 3})
+      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Nothing})
       ==> logStr "SMT: trying mixed interpretation"                  
       ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})      
     smt' = smt (solver cfg)
@@ -100,7 +100,13 @@ close :: Type Ix.Term -> Schema Ix.Term
 close (SzVar v)       = SzVar v
 close (SzCon n ts ix) = SzCon n ts ix
 close (SzPair t1 t2)  = SzPair (close t1) (close t2)
-close t@(SzArr n p)   = SzQArr (nub (SzT.bvarsIx t)) n p
+close t@(SzArr n p)   = SzQArr (Set.toList (bvs t)) n p where
+  bvs :: SizeType knd Ix.Term -> Set.Set Ix.VarId
+  bvs (SzVar _) = Set.empty
+  bvs (SzCon _ ts ix) = Set.fromList (Ix.bvars ix) `Set.union` Set.unions [bvs t | t <- ts]
+  bvs (SzPair t1 t2) = bvs t1 `Set.union` bvs t2
+  bvs (SzArr n p) = bvs n `Set.union` bvs p
+  bvs (SzQArr ixs n p) = (bvs n `Set.union` bvs p) Set.\\ Set.fromList ixs
 
 
 freshVarIds :: MonadUnique m => Int -> m [Ix.VarId]
@@ -276,11 +282,12 @@ infer sig p = generateConstraints >>= solveConstraints where
     putExecLog l
     assertRight SizeTypeError res
   solveConstraints cs = do
-    p <- reader constraintProcessor
-    (msig,l) <- lift (lift (SOCS.solveConstraints p sig cs))
+    pr <- reader constraintProcessor
+    focs <- SOCS.toFOCS cs
+    putExecLog [Node (PP.text "Generated FOCS") [Node (PP.pretty c) [] | c <- focs]]
+    (msig,l) <- lift (lift (SOCS.solveConstraints pr sig focs))
     putExecLog l
-    assertJust ConstraintUnsolvable msig
-  
+    assertJust ConstraintUnsolvable msig  
 
 timeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM (SzT.Signature (TSymbol f) (SOCS.Polynomial Integer))

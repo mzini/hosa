@@ -16,7 +16,8 @@ module HoSA.Data.Index (
   , metaVar
   , freshMetaVar
   , substituteMetaVar
-  , unsafePeakVar
+  , peakMetaVar
+  , unsafePeakMetaVar
   -- * Constraints
   , Constraint (..)
   , lhs
@@ -58,18 +59,14 @@ data Term =
 
 data Constraint =
   Term :>=: Term
-  | Term :=: Term
 
 data DConstraint = NOccur VarId MetaVar
 
 infixr 0 :>=:
-infixr 0 :=:
 
 lhs, rhs :: Constraint -> Term
 lhs (l :>=: _) = l
-lhs (l :=: _) = l
 rhs (_ :>=: r) = r
-rhs (_ :=: r) = r
 
 fvar :: VarId -> Term
 fvar = Var . FVar
@@ -101,8 +98,11 @@ substituteMetaVar (MetaVar _ ref) t = do
     Nothing -> liftIO (writeIORef ref (Just t)) >> return True
     _ -> return False
 
-unsafePeakVar :: MetaVar -> Either Unique Term
-unsafePeakVar (MetaVar u ref) =
+peakMetaVar :: MonadIO m => MetaVar -> m (Maybe Term)
+peakMetaVar (MetaVar _ ref) = liftIO (readIORef ref)
+  
+unsafePeakMetaVar :: MetaVar -> Either Unique Term
+unsafePeakMetaVar (MetaVar u ref) =
   case unsafePerformIO (readIORef ref) of
     Nothing -> Left u
     Just ix -> Right ix
@@ -113,7 +113,7 @@ vars (Succ ix) = vars ix
 vars (Sum ixs) = concatMap vars ixs
 vars (Fun _ ixs) = concatMap vars ixs
 vars (Var v) = [v]
-vars (MVar mv) = either err vars (unsafePeakVar mv) where
+vars (MVar mv) = either err vars (unsafePeakMetaVar mv) where
   err _ = error "HoSA.Index.fvars: free variables on terms with meta-variables cannot be determined"
 
 bvars :: Term -> [VarId]
@@ -150,7 +150,7 @@ instance PP.Pretty Sym where
     n = fromMaybe "f" mn
 
 instance PP.Pretty MetaVar where
-  pretty mv@(MetaVar v _) = PP.text "X" PP.<> PP.int (uniqueToInt v) PP.<> ppContent (unsafePeakVar mv) where
+  pretty mv@(MetaVar v _) = PP.text "X" PP.<> PP.int (uniqueToInt v) PP.<> ppContent (unsafePeakMetaVar mv) where
     ppContent (Left _) = PP.empty 
     ppContent (Right t) = PP.text "@" PP.<> PP.braces (PP.pretty t)
 
@@ -164,7 +164,7 @@ instance PP.Pretty Term where
 
 instance PP.Pretty Constraint where
   pretty (ix1 :>=: ix2) = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text ">=" PP.</> PP.pretty ix2
-  pretty (ix1 :=: ix2)  = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text "=" PP.</> PP.pretty ix2
+  -- pretty (ix1 :=: ix2)  = PP.hang 2 $ PP.pretty ix1 PP.<+> PP.text "=" PP.</> PP.pretty ix2
 
 -- substitutions
 
