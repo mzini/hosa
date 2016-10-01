@@ -223,7 +223,10 @@ abstractTimeType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty
       co <- case p of
         _ :-> _             -> return (clock (Ix.bvar i))
         _ | isConstructor f -> return (clock (Ix.bvar i))
-        _                   -> lift (clock <$> freshIxTerm (Set.insert i pvsp))
+        _                   -> do
+          ix <- lift (freshIxTerm pvsp)
+          return (clock (Ix.ixSum [ix,Ix.bvar i]))
+          -- lift (clock <$> (freshIxTerm (Set.insert i pvsp)))
       return (Set.insert i (fvsn `Set.union` nvsp)
              , Set.insert i pvsp
              , SzArr n' (SzArr ci (SzPair p' co)))
@@ -263,16 +266,28 @@ ppTree (Node n ts) = PP.group (PP.pretty n) PP.<$$> PP.text "" PP.<$$> PP.indent
 -- commands
 ----------------------------------------------------------------------
 
+constr :: String -> Symbol
+constr n = Symbol n False
+
+-- todo
+initialEnv :: Environment Symbol
+initialEnv = Map.fromList $
+             [ (constr "[]", list alpha)
+             , (constr "(:)", alpha :-> list alpha :-> list alpha)
+             , (constr "True", boolean)
+             , (constr "False", boolean)
+             , (constr "0", nat)
+             , (constr "succ", nat :-> nat) ]
+  where
+    alpha = TyVar (uniqueFromInt 1)
+    list e = TyCon "L" [e]
+    boolean = TyCon "Bool" []
+    nat = TyCon "Nat" []
+
+
 readProgram :: RunM (Program Symbol Variable)
 readProgram = reader input >>= fromFile >>= assertRight ParseError >>= inferMLTypes where
   inferMLTypes = assertRight SimpleTypeError . inferTypes initialEnv
-  -- TODO
-  initialEnv = Map.fromList $ runUnique $ do
-    v <- TyVar <$> unique
-    let l = TyCon "L" [v]
-    return [ (Symbol "[]" False, l)
-           , (Symbol "(:)" False, v :-> l :-> l)
-           ]
   
 
 infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> Program f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
@@ -296,8 +311,8 @@ timeAnalysis p = do
   let (ticked,aux) = tickProgram p
   status "Instrumented program" ticked
   status "Auxiliary equations" aux
-  let sig = abstractSignature w -- TODO
-  status "Abstract signature" sig 
+  let sig = abstractSignature w
+  status "Abstract signature" sig  -- TODO
   infer sig ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
