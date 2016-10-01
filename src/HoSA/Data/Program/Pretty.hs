@@ -107,3 +107,5 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypingError f v) where
   pretty (VariableUndefined rl v) =
     PP.text "Variable" PP.<+> PP.squotes (PP.pretty v) PP.<+> PP.text "undefined:"
     PP.<$> PP.indent 2 (PP.pretty rl)  
+  pretty (ConstructorMissingSignature f) =
+    PP.text "The constructor" PP.<+> PP.squotes (PP.pretty f) PP.<+> PP.text "misses a type declaration."

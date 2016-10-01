@@ -5,9 +5,12 @@ module HoSA.Data.Program.DMInfer
   )
 where
 
+import           Control.Arrow (second)
 import           Control.Monad.State
 import           Control.Monad.Except
 import qualified Data.Map as Map
+import qualified Data.Set as Set
+import           Data.Graph (stronglyConnComp, flattenSCC)
 
 import           HoSA.Data.MLTypes
 import           HoSA.Data.Program.Types
@@ -17,14 +20,14 @@ import           HoSA.Utils
 
 
 newtype InferM f v a =
-  InferM (StateT (Environment f) (ExceptT (TypingError f v) UniqueM) a)
+  InferM (StateT (Set.Set f, Signature f) (ExceptT (TypingError f v) UniqueM) a)
   deriving (  Applicative, Functor, Monad
             , MonadError (TypingError f v)
-            , MonadState (Environment f)
+            , MonadState (Set.Set f, Signature f)
             , MonadUnique)
 
-runInfer :: IsSymbol f => Environment f -> InferM f v a -> Either (TypingError f v) (a, Environment f)
-runInfer sig (InferM m) = runUniqueWithout vs (runExceptT (runStateT m sig))
+runInfer :: Signature f -> InferM f v a -> Either (TypingError f v) (a, Signature f)
+runInfer sig (InferM m) = second snd <$> runUniqueWithout vs (runExceptT (runStateT m (Map.keysSet sig, sig)))
   where
     vs = foldl (flip fvsDL) [] (Map.elems sig)
 
@@ -43,21 +46,29 @@ runInfer sig (InferM m) = runUniqueWithout vs (runExceptT (runStateT m sig))
 freshTyExp :: MonadUnique m => m SimpleType
 freshTyExp = TyVar <$> unique
 
-lookupFunTpe :: Ord f => f -> InferM f v SimpleType
+lookupFunTpe :: (Ord f, IsSymbol f) => f -> InferM f v SimpleType
 lookupFunTpe f = do
-  env <- get
-  let create = do
-        tp <- freshTyExp
-        put (Map.insert f tp env)
-        return tp
-  maybe create return (Map.lookup f env)
-        
+  (_,env) <- get
+  maybe create return (Map.lookup f env) >>= inst
+  where
+    create | isDefined f = do
+               tp <- freshTyExp
+               modify (second (Map.insert f tp))
+               return tp
+           | otherwise = throwError (ConstructorMissingSignature f)
+    inst tp = do
+       final <- Set.member f <$> fst <$> get
+       if final
+         then do 
+         s <- substFromList <$> sequence [ (v,) <$> freshTyExp | v <- fvs tp ]
+         return (substitute s tp)
+         else return tp
   
 unifyM :: UntypedEquation f v -> UntypedExpression f v -> SimpleType -> SimpleType -> InferM f v TypeSubstitution
 unifyM rl a tp1 tp2 = 
   case unifyType [(tp1,tp2)] of
     Left (tp1',tp2') -> throwError (IncompatibleType rl a tp1' tp2')
-    Right s -> modify (substitute s) >> return s
+    Right s -> modify (second (substitute s)) >> return s
 
 -- TODO 
 inferEquation :: (Ord v, Ord f, IsSymbol f) => UntypedEquation f v -> InferM f v (TypedEquation f v, TypeSubstitution)
@@ -67,19 +78,12 @@ inferEquation rl = do
   return (TypedEquation env2 (Equation (substitute subst2 lhs') rhs') (typeOf rhs')
          , subst2 `o` subst1)
   where
-
-    headSym = fst (definedSymbol rl)
-    
     fromEnv env v = 
       case Map.lookup v env of
         Nothing -> do
           tp <- freshTyExp
           return (Map.insert v tp env, tp)
         Just tp -> return (env, tp)
-
-    instantiate tp = do
-      s <- substFromList <$> sequence [ (v,) <$> freshTyExp | v <- fvs tp ]
-      return (substitute s tp)
 
     check env t tp = do
       (t',env',subst') <- infer env t
@@ -91,7 +95,7 @@ inferEquation rl = do
       (env1,tp) <- fromEnv env v
       return (Var v tp, env1, identSubst)
     infer env (Fun f _ l) = do
-      tp <- lookupFunTpe f >>= (if f == headSym then return else instantiate)
+      tp <- lookupFunTpe f
       return (Fun f tp l, env, identSubst)
     infer env (Pair _ s1 s2) = do
       (t1, env1, subst1) <- infer env s1
@@ -118,10 +122,26 @@ inferEquation rl = do
              , adj x subst2 (adj y subst2 env2)
              , subst2 `o` subst1)
 
-inferTypes :: (Ord v, Ord f, IsSymbol f) => Environment f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)
-inferTypes initialEnv eqns = uncurry Program <$> runInfer initialEnv (walk [] eqns) where
+inferSCC :: (Ord v, Ord f, IsSymbol f) => Signature f -> [UntypedEquation f v] -> Either (TypingError f v) ([TypedEquation f v],Signature f)
+inferSCC startSig eqns = runInfer startSig (walk [] eqns) where
   walk teqs [] = return teqs
   walk teqs (eq:eqs) = do
     (teq,subst) <- inferEquation eq
     walk (teq : substitute subst `map` teqs) eqs
 
+
+callSCCs :: Eq f => [UntypedEquation f v] -> [[UntypedEquation f v]]
+callSCCs eqs = map flattenSCC sccs'
+  where
+    sccs' = stronglyConnComp [ (eq, i, succs eq) | (i, eq) <- eeqs ]
+    eeqs = zip [ 0::Int ..] eqs
+    succs eq = [ j | (j, eq') <- eeqs
+                   , dsym eq' `elem` dsym eq : funs (rhs eq) ]
+      where dsym = fst . definedSymbol
+
+inferTypes :: (Ord v, Eq f, Ord f, IsSymbol f) => Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    
+inferTypes initialSig eqns = walk (callSCCs eqns) [] initialSig where
+  walk []         teqs sig = return (Program teqs sig)
+  walk (scc:sccs) teqs sig = do
+    (teqs', sig') <- inferSCC sig scc
+    walk sccs (teqs' ++ teqs) sig'

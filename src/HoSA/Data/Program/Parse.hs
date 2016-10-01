@@ -30,7 +30,6 @@ freshLocation = updateState succ >> getState
 -- lexing
 ----------------------------------------------------------------------
 
-
 whiteSpace1 :: Parser String
 whiteSpace1 = many1 ((space <|> tab <|> newline) <?> "whitespace")
 
@@ -86,6 +85,7 @@ reservedWords = words "let be in ; = [ ] ::"
 
 enil :: Location -> UntypedExpression Symbol v
 enil = Fun NIL ()
+
 econs :: Location -> UntypedExpression Symbol v
       -> UntypedExpression Symbol v -> UntypedExpression Symbol v
 econs l h t = Apply () (Apply () (Fun CONS () l) h) t

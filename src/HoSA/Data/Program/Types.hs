@@ -87,4 +87,5 @@ data TypingError f v =
   | LetPInLHS (UntypedEquation f v)
   | IllformedConstructorType f SimpleType
   | VariableUndefined (UntypedEquation f v) v
+  | ConstructorMissingSignature f
     

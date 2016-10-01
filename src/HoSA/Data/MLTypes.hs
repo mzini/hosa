@@ -166,14 +166,14 @@ fvs = flip fvsDL []
 pfvsDL :: SimpleType -> [TypeVariable] -> [TypeVariable]
 pfvsDL (TyVar v)     = (:) v
 pfvsDL (TyCon _ as)  = \ vs -> foldl (flip pfvsDL) vs as
-pfvsDL (tp1 :*: tp2) = pfvsDL tp2 . pfvsDL tp1
-pfvsDL (tp1 :-> tp2) = pfvsDL tp2 . nfvsDL tp1
+pfvsDL (tp1 :*: tp2) = pfvsDL tp1 . pfvsDL tp2
+pfvsDL (tp1 :-> tp2) = pfvsDL tp1 . nfvsDL tp2
 
 nfvsDL :: SimpleType -> [TypeVariable] -> [TypeVariable]
 nfvsDL (TyVar _)     = id
 nfvsDL (TyCon _ as)  = \ vs -> foldl (flip nfvsDL) vs as
-nfvsDL (tp1 :*: tp2) = nfvsDL tp2 . nfvsDL tp1
-nfvsDL (tp1 :-> tp2) = nfvsDL tp2 . pfvsDL tp1
+nfvsDL (tp1 :*: tp2) = nfvsDL tp1 . nfvsDL tp2
+nfvsDL (tp1 :-> tp2) = nfvsDL tp1 . pfvsDL tp2
 
 ----------------------------------------------------------------------
 -- substitutions
