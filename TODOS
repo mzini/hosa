@@ -1,0 +1,2 @@
+* fix precedence when parsing lists
+* allow parsing of (:)
