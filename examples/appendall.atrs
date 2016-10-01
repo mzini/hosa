@@ -1,8 +1,8 @@
-mapL f NilL = NilL;
-mapL f (ConsL x xs) = ConsL (f x) (mapL f xs);
+map f [] = [];
+map f (x:xs) = (f x) : (map f xs);
 
-append Nil ys = ys;
-append (Cons x xs) ys = Cons x (append xs ys);
+append [] ys = ys;
+append (x:xs) ys = x : (append xs ys);
 
-main xs ys = mapL (append xs) ys;
+main xs ys = map (append xs) ys;
 
