@@ -76,6 +76,7 @@ data TypedEquation f v = TypedEquation { eqEnv :: Environment v
                                        , eqTpe :: SimpleType }
                   
 data Program f v = Program { equations :: [TypedEquation f v]
+                           , mainFns   :: [f]
                            , signature :: Signature f }
 
 ----------------------------------------------------------------------

@@ -293,6 +293,7 @@ inferSizeType ctx t@(Apply _ t1 t2) =
   (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of
     SzArr sArg tBdy -> do
+      -- tArg <- instantiate sArg
       (vs,tArg) <- matrix sArg
       notOccur vs `mapM_` concatMap metaVars (sArg : [ tp | (v, Right tp) <- Map.toList ctx1,  v `elem` fvars t2 ])
       (ctx2,tp2) <- inferSizeType ctx1 t2

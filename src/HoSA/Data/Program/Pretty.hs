@@ -2,6 +2,7 @@ module HoSA.Data.Program.Pretty
   (
     prettyExpression
   , prettyEquation
+  , prettyProgram
   ) where
 
 import Data.List (partition)
@@ -12,6 +13,7 @@ import HoSA.Utils (uniqueToInt)
 import HoSA.Data.MLTypes
 import HoSA.Data.Program.CallSite
 import HoSA.Data.Program.Equation
+import HoSA.Data.Program.Expression (funs)
 import HoSA.Data.Program.Types
 
 
@@ -71,24 +73,27 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypedEquation f v) where
                      PP.<+> PP.text ":"
                      PP.</> PP.pretty eqTpe)
 
-instance (IsSymbol f, Eq f, PP.Pretty f, PP.Pretty v) => PP.Pretty (Program f v) where
-  pretty Program{..} =
+prettyProgram :: (IsSymbol f, Eq f, PP.Pretty f, PP.Pretty v, PP.Pretty d) => Program f v -> Map.Map f d -> PP.Doc
+prettyProgram Program{..} sig = 
     PP.vcat [ ppDecl d tp
               PP.<$> PP.vcat (PP.pretty `map` eqs)
               PP.<$> PP.empty
             | (d,tp) <- ds
-            , let eqs = [eq | eq <- eqEqn `map` equations, fst (definedSymbol eq) == d]
+            , let eqs = [eq | eq <- untypedEquations, fst (definedSymbol eq) == d]
             , not (null eqs)]
     PP.<$> PP.text "where"
-    PP.<$> PP.indent 2 (PP.vcat [ppDecl c tp | (c,tp) <- cs])
+    PP.<$> PP.indent 2 (PP.vcat [ppDecl c tp | (c,tp) <- cs, c `elem` fs])
     where
-      ppDecl f tp = PP.pretty f PP.<+> PP.text "::" PP.<+> PP.pretty (rename (fvs tp) tp)
-      (ds,cs) = partition (isDefined . fst) (Map.toList signature)
-    -- PP.vcat [ PP.pretty eq | eq <- equations]
-    -- PP.<$> PP.text "where"
-    -- PP.<$> PP.indent 2 (PP.vcat [ppDecl c tp | (c,tp) <- M.toList signature])
-    -- where
-    --   ppDecl f tp = PP.pretty f PP.<+> PP.text "::" PP.<+> PP.pretty tp
+      ppDecl f tp = PP.pretty f PP.<+> PP.text "::" PP.<+> PP.pretty tp
+
+      untypedEquations = eqEqn `map` equations
+      fs = concatMap (\ e -> funs (lhs e) ++ funs (rhs e)) untypedEquations
+      (ds,cs) = partition (isDefined . fst) (Map.toList sig)
+      
+  
+instance (IsSymbol f, Eq f, PP.Pretty f, PP.Pretty v) => PP.Pretty (Program f v) where
+  pretty p = prettyProgram p (Map.map ren (signature p)) where
+    ren tp = rename (fvs tp) tp
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypingError f v) where
   pretty (IncompatibleType rl t has expected) =

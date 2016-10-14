@@ -139,9 +139,9 @@ callSCCs eqs = map flattenSCC sccs'
                    , dsym eq' `elem` dsym eq : funs (rhs eq) ]
       where dsym = fst . definedSymbol
 
-inferTypes :: (Ord v, Eq f, Ord f, IsSymbol f) => Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    
-inferTypes initialSig eqns = walk (callSCCs eqns) [] initialSig where
-  walk []         teqs sig = return (Program teqs sig)
+inferTypes :: (Ord v, Eq f, Ord f, IsSymbol f) => [f] -> Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    
+inferTypes mainFns initialSig eqns = walk (callSCCs eqns) [] initialSig where
+  walk []         teqs sig = return (Program teqs mainFns sig)
   walk (scc:sccs) teqs sig = do
     (teqs', sig') <- inferSCC sig scc
     walk sccs (teqs' ++ teqs) sig'

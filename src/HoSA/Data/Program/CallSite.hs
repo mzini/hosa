@@ -55,9 +55,9 @@ kca n (f,tpf,l) g
     dataType _            = False
   
 
-withCallContexts :: (Eq v, IsSymbol f, Eq f, Ord f) => CSAbstract f -> Maybe [f] -> Program f v -> Program (CtxSymbol f) v
-withCallContexts abstr startSymbols p =
-  walk [] [ (initial f, identSubst) | f <- Map.keys (signature p), maybe True (elem f) startSymbols]
+withCallContexts :: (Eq v, IsSymbol f, Eq f, Ord f) => CSAbstract f -> Program f v -> Program (CtxSymbol f) v
+withCallContexts abstr p =
+  walk [] [ (initial f, identSubst) | f <- Map.keys (signature p), f `elem` mainFns p]
   where
     defines f eq = fst (definedSymbol (eqEqn eq)) == (csSymbol f)
 

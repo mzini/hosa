@@ -25,7 +25,7 @@ import qualified HoSA.Data.Index as Ix
 import qualified HoSA.SizeType.SOConstraint as SOCS
 import qualified HoSA.Data.SizeType as SzT
 import           HoSA.Data.SizeType (SizeType (..), Schema, Type)
-import           GUBS hiding (Symbol, Variable, Var)
+import           GUBS hiding (Symbol, Variable, Var, definedSymbol)
 
 deriving instance Typeable (SMTSolver)
 deriving instance Data (SMTSolver)
@@ -46,14 +46,14 @@ data HoSA = HoSA { width :: Int
 
 defaultConfig :: HoSA
 defaultConfig =
-  HoSA { width = 1 &= help "Sized-types width, i.e. number of extra variables"
+  HoSA { width = 1 &= help "Sized-types width, i.e. number of extra variables. Defaults to 1."
        , input = def &= typFile &= argPos 0
-       , solver = Z3 &= help "SMT solver (minismt, z3)."
+       , solver = Z3 &= help "SMT solver (minismt, z3). Defaults to z3."
        , mains = Nothing &= help "List of analysed main functions."
        , verbose = False
        , analyse = Size &= help "Analysis objective (size, time)."
-       , smtStrategy = Simple  &= help "Constraint solving strategy (Simple, SCC)."
-       , clength = 0 &= help "Length of call-site contexts." }
+       , smtStrategy = SCC  &= help "Constraint solving strategy (Simple, SCC). Defaults to SCC."
+       , clength = 1 &= help "Length of call-site contexts. Defaults to 1." }
   &= help "Infer size-types for given ATRS"
 
 abstraction :: Eq f => HoSA -> CSAbstract f
@@ -162,7 +162,7 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
     
     -- returns: negative free variables, positive free variables, type
     annotateArr w vs n p = do
-      (fvsn, n') <- annotateNegative vs n
+      (fvsn, n') <- annotateNegative Set.empty n
       (nvsp, pvsp, p') <- annotatePositive w (fvsn `Set.union` vs) p
       return (fvsn `Set.union` nvsp, pvsp, SzArr n' p')        
 
@@ -284,10 +284,17 @@ initialEnv = Map.fromList $
     boolean = TyCon "Bool" []
     nat = TyCon "Nat" []
 
+-- 
+
 
 readProgram :: RunM (Program Symbol Variable)
-readProgram = reader input >>= fromFile >>= assertRight ParseError >>= inferMLTypes where
-  inferMLTypes = assertRight SimpleTypeError . inferTypes initialEnv
+readProgram = do
+  eqs <- parseFile
+  fs <- fromMaybe [last [ fst (definedSymbol eq) | eq <- eqs]] <$> reader startSymbols
+  inferMLTypes fs eqs
+    where
+      inferMLTypes fs =  assertRight SimpleTypeError . inferTypes fs initialEnv
+      parseFile = reader input >>= fromFile >>= assertRight ParseError
   
 
 infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> Program f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
@@ -304,16 +311,20 @@ infer sig p = generateConstraints >>= solveConstraints where
     putExecLog l
     assertJust ConstraintUnsolvable msig  
 
+putSolution :: (Eq f, PP.Pretty f, PP.Pretty v, PP.Pretty ix, IsSymbol f) =>
+  Program f v -> Map.Map f (SizeType knd ix) -> RunM ()
+putSolution p sig =
+    status "Sized-type annotated program" (prettyProgram p (Map.map ren sig))
+    where ren = runUnique . SzT.rename
+    
 timeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
-  Program f v -> RunM (SzT.Signature (TSymbol f) (SOCS.Polynomial Integer))
+  Program f v -> RunM ()
 timeAnalysis p = do
   w <- reader width
   let (ticked,aux) = tickProgram p
   status "Instrumented program" ticked
   status "Auxiliary equations" aux
-  let sig = abstractSignature w
-  status "Abstract signature" sig  -- TODO
-  infer sig ticked
+  infer (abstractSignature w) ticked >>= putSolution ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
     tickSchema = SzQArr [1] (SzCon "#" [] (Ix.bvar 1)) (SzCon "#" [] (Ix.Succ (Ix.bvar 1)))
@@ -330,10 +341,11 @@ timeAnalysis p = do
           ar = arity p f
 
 sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
-  Program f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
+  Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  infer (abstractSignature w) p
+  status "AbstractSignature" (abstractSignature w)
+  infer (abstractSignature w) p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))
   
@@ -341,16 +353,15 @@ main :: IO ()
 main = do
   cfg <- cmdArgs defaultConfig
   r <- runUniqueT $ flip runReaderT cfg $ runExceptT $ do
-    fs <- reader startSymbols
     abstr <- reader abstraction
     p <- readProgram
     status "Input program" (PP.pretty p)    
-    let p' = withCallContexts abstr fs p
+    let p' = withCallContexts abstr p
     status "Calling-context annotated program" (PP.pretty p')
     analysis <- reader analyse
     case analysis of
-      Time -> timeAnalysis p' >>= status "Timed Signature"
-      Size -> sizeAnalysis p' >>= status "Sized-Type Signature"
+      Time -> timeAnalysis p'
+      Size -> sizeAnalysis p'
   case r of
     Left e@SizeTypeError{} -> putDocLn e >> exitSuccess
     Left e -> putDocLn e >> exitWith (ExitFailure (-1))

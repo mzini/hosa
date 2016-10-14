@@ -1,6 +1,6 @@
-fold f [] b = b;
-fold f (l : ls) b = f l (fold f ls b);
+foldr f b [] = b;
+foldr f b (l : ls) = f l (foldr f b ls);
 
-f1 n m l = (n,m) : l;
-f2 ms n l = fold (f1 n) ms l;
-product ns ms = fold (f2 ms) ns [];
+lam1 n m l = (n,m) : l;
+lam2 ms n l = foldr (lam1 n) l ms;
+product ns ms = foldr (lam2 ms) [] ns;

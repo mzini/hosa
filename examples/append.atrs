@@ -1,4 +1,4 @@
-append Nil ys = ys;
-append (Cons x xs) ys = Cons x (append xs ys);
+append [] ys = ys;
+append (x : xs) ys = x : (append xs ys);
 
 
