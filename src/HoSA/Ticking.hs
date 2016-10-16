@@ -4,7 +4,7 @@ module HoSA.Ticking
   , TSymbol (..)
   , arity
   , translatedType
-  , constrType
+  , clockType
   , auxType
   , TVariable
   , TickedExpression
@@ -127,8 +127,13 @@ translateLhs ar l t =  apply <$> renameHead l <*> return t where
 translateRhs :: (Ord f, Eq v) => IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
   translateK (Var v tp) t k = k (Var (var v) (translatedType tp)) t
-  translateK (Fun f _ _) t k | isConstructor f && ar f == 0 = constrFun f >>= flip k t
-  translateK (Fun f _ _) t k = auxFun f 1 >>= flip k t
+  translateK (Fun f tp _) t k = do
+    f0 <- auxFun f 0
+    ve <- freshVar
+    vc <- freshVar
+    letp (apply f0 t) (ve,vc) <$> k (Var ve (translatedType tp)) (Var vc clockType)
+  -- translateK (Fun f _ _) t k | isConstructor f && ar f == 0 = constrFun f >>= flip k t
+  -- translateK (Fun f _ _) t k = auxFun f 1 >>= flip k t
   translateK (Pair _ e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
     k2 e1' e2' t2 = k (pair e1' e2') t2 --TODO
@@ -155,7 +160,7 @@ translateEquation ar TypedEquation {..} = do
 
 auxiliaryEquations :: (Ord f, IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
                                                                           
-auxiliaryEquations ar (f,tpf) = mapM auxEquation [1 .. if isDefined f then arf - 1 else arf] where
+auxiliaryEquations ar (f,tpf) = mapM auxEquation [0 .. if isDefined f then arf - 1 else arf] where
     arf = ar f
     vars = walk 1 tpf where
     walk i (tp1 :-> tp2) = (Var (Fresh i) (translatedType tp1)) : walk (i+1) tp2
@@ -202,7 +207,6 @@ tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs }
          
 -- pretty printers
 instance PP.Pretty f => PP.Pretty (TSymbol f) where
-  pretty (TSymbol f 0) = PP.bold (PP.pretty f)
   pretty (TSymbol f i) = PP.bold (PP.pretty f) PP.<> PP.text "#" PP.<> PP.int i
   pretty (TConstr c) = PP.pretty c
   pretty Tick = PP.text "T"

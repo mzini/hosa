@@ -112,6 +112,8 @@ close t@(SzArr n p)   = SzQArr (Set.toList (bvs t)) n p where
 freshVarIds :: MonadUnique m => Int -> m [Ix.VarId]
 freshVarIds n = map uniqueToInt <$> uniques n
 
+freshVarId :: MonadUnique m => m Ix.VarId
+freshVarId = uniqueToInt <$> unique
 
 abstractSchema :: (IsSymbol f, MonadUnique m) => Int -> f -> SimpleType -> m (Schema Ix.Term)
 abstractSchema width f tp = close <$> abstractType width f tp
@@ -154,7 +156,7 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
                             return (fvs' `Set.union` fvs, as ++ [a]))
                         (Set.empty,[])
                         ts
-      [i] <- freshVarIds 1
+      i <- freshVarId
       return (Set.insert i fvs, SzCon n as (Ix.bvar i))
     annotateNegative vs (n :-> p) = do
       (nvs, pvs, SzArr n' p') <- annotateArr width vs n p
@@ -166,11 +168,8 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
       (nvsp, pvsp, p') <- annotatePositive w (fvsn `Set.union` vs) p
       return (fvsn `Set.union` nvsp, pvsp, SzArr n' p')        
 
-abstractTimeSchema :: (IsSymbol f, MonadUnique m) => Int -> f -> SimpleType -> m (Schema Ix.Term)
-abstractTimeSchema width f tp = close <$> abstractTimeType width f tp
-
-abstractTimeType :: (IsSymbol f, MonadUnique m) => Int -> f -> SimpleType -> m (Type Ix.Term)
-abstractTimeType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp)
+abstractTimeType :: (IsSymbol f, MonadUnique m) => Int -> f -> SimpleType -> m (Type Ix.Term, Ix.VarId)
+abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositive 0 Set.empty stp <*> freshVarId)
   where
     thrd (_,_,c) = c
     clock = SzCon "#" []
@@ -208,7 +207,7 @@ abstractTimeType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty
                             return (fvs' `Set.union` fvs, as ++ [a]))
                         (Set.empty,[])
                         ts
-      [i] <- freshVarIds 1
+      i <- freshVarId
       return (Set.insert i fvs, SzCon n as (Ix.bvar i))
     annotateNegative vs (n :-> p) = do
       (nvs, pvs, SzArr n' p') <- annotateArr width vs n p
@@ -218,7 +217,7 @@ abstractTimeType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty
     annotateArr w vs n p = do
       (fvsn, n') <- annotateNegative vs n
       (nvsp, pvsp, p') <- annotatePositive w (fvsn `Set.union` vs) p
-      [i] <- freshVarIds 1
+      i <- freshVarId
       let ci = clock (Ix.bvar i)
       co <- case p of
         _ :-> _             -> return (clock (Ix.bvar i))
@@ -324,21 +323,23 @@ timeAnalysis p = do
   let (ticked,aux) = tickProgram p
   status "Instrumented program" ticked
   status "Auxiliary equations" aux
+  -- status "Abstract signature" (abstractSignature w)
   infer (abstractSignature w) ticked >>= putSolution ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
     tickSchema = SzQArr [1] (SzCon "#" [] (Ix.bvar 1)) (SzCon "#" [] (Ix.Succ (Ix.bvar 1)))
     functionDecls w = runUnique (decls w `concatMapM` (Map.toList (signature p)))
     decls w (f,tp) = do
-      t <- abstractTimeType w f tp
-      let auxDecls = [(TSymbol f (i+1), close (suite t i)) | i <- [0 .. ar-1]]
-      if isDefined f
-        then return auxDecls
-        else return ((TConstr f, close (suite t ar)) : auxDecls)
+      (t,v) <- abstractTimeType w f tp
+      let constrDecl = (TConstr f, close (suite t ar))
+          auxDecls = (TSymbol f 0, close (SzArr (clock v) (SzPair t (clock v))))
+                     : [(TSymbol f (i + 1), close (suite t i)) | i <- [0 .. ar - 1]]
+      return $ if isDefined f then auxDecls else ( constrDecl : auxDecls )
         where
+          ar = arity p f
+          clock = SzCon "#" [] . Ix.bvar
           suite t 0 = t
           suite (SzArr n (SzArr _ (SzPair p _))) i = SzArr n (suite p (i-1))
-          ar = arity p f
 
 sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
