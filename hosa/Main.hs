@@ -345,7 +345,7 @@ sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  status "AbstractSignature" (abstractSignature w)
+  -- status "AbstractSignature" (abstractSignature w)
   infer (abstractSignature w) p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))
@@ -358,7 +358,7 @@ main = do
     p <- readProgram
     status "Input program" (PP.pretty p)    
     let p' = withCallContexts abstr p
-    status "Calling-context annotated program" (PP.pretty p')
+    status "Specialised program" (PP.pretty p')
     analysis <- reader analyse
     case analysis of
       Time -> timeAnalysis p'
