@@ -112,8 +112,10 @@ lhsP = application (s <?> "function") arg where
   
   arg = (p `sepBy1` reserved ":") >>= lstP
   
-  p = try nilP <|> try c <|> try v <|> parens (application arg arg)
-    
+  p = try nilP <|> try c <|> try v <|> par 
+
+  par = foldr1 (Pair ((),())) <$> parens (application arg arg `sepBy1` comma)
+  
   s = (symbol >>= fun) <?> "function symbol"
   
   c = (constructor >>= fun) <?> "constructor"

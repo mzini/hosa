@@ -193,8 +193,12 @@ footprint l = logBlk (PP.text "Footprint of" PP.<+> PP.pretty l) $ fpInfer l
           ctx2' <- mapM (substituteTyVars st) ctx2
           tp <- Ix.o (Ix.substFromList si)  <$> substituteTyVars st p
           return (FP (ctx1' `Map.union` ctx2') tp) 
-        _ -> throwError (IlltypedTerm t1 "function type" tp1)        
-    fpInfer_ _ = throwError (IllformedLhs l)
+        _ -> throwError (IlltypedTerm t1 "function type" tp1)
+    fpInfer_ (Pair _ t1 t2) = do
+      FP ctx1 tp1 <- fpInfer t1
+      FP ctx2 tp2 <- fpInfer t2
+      return (FP (ctx1 `Map.union` ctx2) (SzPair tp1 tp2))
+    fpInfer_ t = throwError (IllformedLhs t)
 
     fpMatch :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> InferM f v ([(Ix.VarId, Ix.Term)], [(TypeVariable, Schema Ix.Term)])
     fpMatch (SzVar v1)                         tp             = return ([],[(v1,toSchema tp)])

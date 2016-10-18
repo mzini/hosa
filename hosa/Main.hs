@@ -275,12 +275,15 @@ initialEnv = Map.fromList $
              , (constr "(:)", alpha :-> list alpha :-> list alpha)
              , (constr "True", boolean)
              , (constr "False", boolean)
+             , (constr "Pair", alpha :-> beta :-> pair alpha beta)             
              , (constr "0", nat)
-             , (constr "succ", nat :-> nat) ]
+             , (constr "S", nat :-> nat) ]
   where
     alpha = TyVar (uniqueFromInt 1)
+    beta = TyVar (uniqueFromInt 2)    
     list e = TyCon "L" [e]
     boolean = TyCon "Bool" []
+    pair a b = TyCon "Pair" [a,b]    
     nat = TyCon "Nat" []
 
 -- 
@@ -345,7 +348,7 @@ sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  -- status "AbstractSignature" (abstractSignature w)
+  status "AbstractSignature" (abstractSignature w)
   infer (abstractSignature w) p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))
