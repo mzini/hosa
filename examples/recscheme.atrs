@@ -1,4 +1,4 @@
-tail (Cons x xs) = xs;
-rec_scheme f Nil = Nil;
-rec_scheme f (Cons x xs) = rec_scheme f (f xs);
+tail (x : xs) = xs;
+rec_scheme f [] = [];
+rec_scheme f (x : xs) = rec_scheme f (f xs);
 main l = rec_scheme tail l;

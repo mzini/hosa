@@ -1,0 +1,3 @@
+rev []     ys = ys;
+rev (x:xs) ys = rev xs (x:ys);
+reverse xs = rev xs [];
