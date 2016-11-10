@@ -1,16 +1,16 @@
 module HoSA.SizeType.SOConstraint where
 
 import           Control.Arrow (first)
-import           Control.Monad (forM_, void, filterM, when, (>=>))
+import           Control.Monad (forM_, void, filterM, when, (>=>), forM)
 import           Data.Tree (Forest)
-import           Data.List ((\\))
-import           Data.Maybe (isNothing)
+import           Data.List ((\\),groupBy,sortBy,nub)
 import qualified Data.Map as Map
-import           Data.Maybe (catMaybes)
+import qualified Data.Set as Set
+import           Data.Maybe (fromMaybe, isNothing, fromJust)
+import           Data.Either (rights)
+import           Data.Graph (graphFromEdges, reachable)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Control.Monad.IO.Class (MonadIO)
-import           Constraints.Set.Solver (atom, setVariable, (<=!))
-import qualified Constraints.Set.Solver as SSolver
 
 import qualified GUBS
 
@@ -41,16 +41,6 @@ instance Monoid SOCS where
 
 -- reduction to first order problem
 
--- vars :: Term -> [Either VarId MetaVar]
--- vars Zero = []
--- vars (Succ ix) = vars ix
--- vars (Sum ixs) = concatMap vars ixs
--- vars (Fun _ ixs) = concatMap vars ixs
--- vars (Var (BVar _)) = error "HoSA.SOConstraint.vars: constraint contains bound variable"
--- vars (Var (FVar v)) = [Left v]
--- vars (MVar mv) = [Right mv]
-
-
 vars :: MonadIO m => Term -> m [VarId]
 vars Zero = return []
 vars (Succ ix) = vars ix
@@ -60,61 +50,65 @@ vars (Var (BVar _)) = error "HoSA.SOConstraint.vars: constraint contains bound v
 vars (Var (FVar v)) = return [v]
 vars (MVar mv) = peakMetaVar mv >>= maybe (return []) vars
 
-
-type SetConstraint = SSolver.Inclusion Unique VarId
-
 isUnset :: MonadIO m => MetaVar -> m Bool
 isUnset mv = isNothing <$> peakMetaVar mv
 
-toSetConstraint :: MonadIO m => [Constraint] -> m [SetConstraint]
-toSetConstraint = concatMapM f where
-  f (l :>=: r) = do
-    mvsl <- filterM isUnset (metaVars l)
-    mvsr <- filterM isUnset (metaVars r)
-    vsr <- vars r
-    let inclusions  = [ atom vr <=! setVariable mvl
-                      | (MetaVar mvl _) <- mvsl, vr <- vsr ]
-        memberships = [ setVariable mvr <=! setVariable mvl
-                      | (MetaVar mvl _) <- mvsl, (MetaVar mvr _) <- mvsr ]
-    return (inclusions ++ memberships)
-    
+mvarIds :: MonadIO m => Term -> m [Unique]
+mvarIds t = map metaVarId <$> filterM isUnset (metaVars t)
+
 noccurs :: [DConstraint] -> MetaVar -> [VarId]
 noccurs ds (MetaVar u _) = [ v' | NOccur v' (MetaVar u' _) <- ds, u == u']
 
-inlineMVars :: MonadIO m => SOCS -> m SOCS
-inlineMVars (SOCS cs ds) = do
-  uncurry substituteMetaVar `mapM_` Map.elems mvSubst
-  return (SOCS [ c | c <- cs, not (inlined c) ] ds)
-  where
-    mvSubst = foldl step Map.empty cs
-    step m (MVar mv@(MetaVar u _) :>=: r) = Map.alter alter u m where
-      alter Nothing = Just (mv, substFromList [ (v,Zero) | v <- noccurs ds mv ] `o` r)
-      alter Just{} = Nothing
-    step m (l :>=: _) = foldl (\ m' (MetaVar u _) -> Map.delete u m') m (metaVars l)
+-- inlineMVars :: MonadIO m => SOCS -> m SOCS
+-- inlineMVars (SOCS cs ds) = do
+--   uncurry substituteMetaVar `mapM_` Map.elems mvSubst
+--   return (SOCS [ c | c <- cs, not (inlined c) ] ds)
+--   where
+--     mvSubst = Map.fromList [ (u,undefined)
+--                            | [MVar mv@(MetaVar u _) :>=: r] <- groupWith (mvarId . lhs) cs]
+--     mvarId (MVar (MetaVar u _)) = Just u
+--     mvarId _                    = Nothing
+--       -- foldl step Map.empty cs
+--     -- step m (MVar mv@(MetaVar u _) :>=: r) = Map.alter alter u m where
+--     --   alter Nothing = Just (mv, substFromList [ (v,Zero) | v <- noccurs ds mv ] `o` r)
+--     --   alter Just{} = Nothing
+--     -- step m (l :>=: _) = foldl (\ m' (MetaVar u _) -> Map.delete u m') m (metaVars l)
 
-    inlined (MVar (MetaVar u _) :>=: _) = u `Map.member` mvSubst
-    inlined _                           = False
+--     inlined (MVar (MetaVar u _) :>=: _) = u `Map.member` mvSubst
+--     inlined _                           = False
 
 
+skolemiseVars :: MonadIO m => [Constraint] -> m (Map.Map Unique (Set.Set VarId))
+skolemiseVars cs = skolemiseVars' <$> forM cs (\ (l :>=: r) -> (,,) <$> mvarIds l <*> mvarIds r <*> vars r ) where
+  skolemiseVars' vs = Map.fromList [(u,Set.fromList (rights (nf `map` reachable g (vf (Left u)))))
+                                   | (mvsl,mvsr,_) <- vs
+                                   , u <- mvsl ++ mvsr ]
+    where
+      vnodes = Map.fromList [ (Right v,[]) | (_,_,vsr) <- vs, v <- vsr ]
+      mvnodes = Map.fromList [ (Left u,[]) | (mvsl,mvsr,_) <- vs, u <- mvsl ++ mvsr ]
+      dependencies = Map.unionsWith (++) [ Map.fromList [ (Left u,map Left mvsr ++ map Right vsr) | u <- mvsl ]
+                                         | (mvsl,mvsr,vsr) <- vs ]
+      (g,nf,vf) = graphFromMap (Map.unions [dependencies, vnodes, mvnodes])
+      
+      graphFromMap m = (g', frst . nf', fromJust . vf')
+        where (g',nf',vf') = graphFromEdges [ (n,n,ns) | (n,ns) <- Map.toList m]
+              frst (a,_,_) = a
+    
 skolemise :: (MonadUnique m, MonadIO m) => SOCS -> m FOCS
-skolemise socs@(SOCS cs ds) = do
-  Just solved <- SSolver.solveSystem <$> toSetConstraint cs
+skolemise (SOCS cs ds) = do
+  svs <- skolemiseVars cs
   let mvs = concat [ metaVars l ++ metaVars r | l :>=: r <- cs]
-  forM_ mvs $ \ mv@(MetaVar u _) -> do
+      svars (MetaVar u _) = fromMaybe [] (Set.toList <$> Map.lookup u svs)
+  forM_ mvs $ \ mv -> do
     unset <- isUnset mv
     when unset $ do 
-      let (Just vs) = catMaybes <$> map fromSolution <$> SSolver.leastSolution solved u
       f <- Sym Nothing <$> unique
-      void (substituteMetaVar mv (Fun f [fvar v | v <- vs \\ noccurs ds mv]))
+      void (substituteMetaVar mv (Fun f [fvar v | v <- svars mv \\ noccurs ds mv]))
   return cs
 
-  where
-    fromSolution SSolver.EmptySet                 = Nothing
-    fromSolution (SSolver.ConstructedTerm c _ []) = Just c
-    fromSolution _                                  = error "Don't know what to do with Set-Solver solution"
 
 toFOCS :: (MonadUnique m, MonadIO m) => SOCS -> m FOCS
-toFOCS = inlineMVars >=> skolemise
+toFOCS = skolemise
       
 toGubsCS :: FOCS -> GubsCS
 toGubsCS = map gconstraint where

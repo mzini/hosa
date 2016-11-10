@@ -66,12 +66,12 @@ startSymbols cfg = map sym <$> mains cfg where
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
-    Simple -> logCS ==> try simplify ==> logCS ==> simple
-    SCC -> logCS ==> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple)))
+    Simple -> try simplify ==> logCS ==> simple
+    SCC -> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple)))
   where
     logCS cs = logOpenConstraints cs >> return (Progress cs)
     logStr str cs = logMsg str >> return (Progress cs)
-    simple =
+    simple = 
       logStr "SMT: trying strongly linear interpretation"
       ==> try (smt' defaultSMTOpts { degree = 1, maxCoeff = Just 1} )
       ==> logStr "SMT: trying linear interpretation"      
@@ -81,9 +81,13 @@ constraintProcessor cfg =
       ==> logStr "SMT: trying multmixed interpretation"            
       ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Nothing})
       ==> logStr "SMT: trying mixed interpretation"                  
-      ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})      
+      ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})
+      ==> logStr "SMT: trying multmixed interpretation of degree 3"            
+      ==> try (smt' defaultSMTOpts { degree = 3, maxCoeff = Nothing})
+      ==> logStr "SMT: trying multmixed interpretation of degree 3"            
+      ==> try (smt' defaultSMTOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
     smt' = smt (solver cfg)
-    simplify =
+    simplify = 
       try instantiate
       ==> try propagateEq
       ==> try (exhaustive (propagateUp <=> propagateDown))
@@ -220,7 +224,7 @@ abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositi
       i <- freshVarId
       let ci = clock (Ix.bvar i)
       co <- case p of
-        _ :-> _             -> return (clock (Ix.bvar i))
+        -- _ :-> _             -> return (clock (Ix.bvar i))
         _ | isConstructor f -> return (clock (Ix.bvar i))
         _                   -> do
           ix <- lift (freshIxTerm pvsp)
@@ -326,7 +330,7 @@ timeAnalysis p = do
   let (ticked,aux) = tickProgram p
   status "Instrumented program" ticked
   status "Auxiliary equations" aux
-  -- status "Abstract signature" (abstractSignature w)
+  status "Abstract signature" (abstractSignature w)
   infer (abstractSignature w) ticked >>= putSolution ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)

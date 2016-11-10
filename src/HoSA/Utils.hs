@@ -25,6 +25,8 @@ module HoSA.Utils (
   , putDocLn
   , hPutDocLn
   , renderPretty
+  -- * Lists
+  , groupWith
 ) where
 
 import System.IO (hPutStrLn, Handle)
@@ -35,8 +37,16 @@ import           Control.Monad.Reader
 import           Control.Monad.RWS
 import           Control.Monad.Trace
 import Control.Monad.Identity (Identity, runIdentity)
+import           Data.Function (on)
+import           Data.List (groupBy,sortBy,nub)
+
 
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+
+-- lists
+
+groupWith :: (Eq b, Ord b) => (a -> b) -> [a] -> [[a]]
+groupWith f = groupBy (\eq1 eq2 -> f eq1 == f eq2) . sortBy (compare `on` f)
 
 -- monad utils
 
