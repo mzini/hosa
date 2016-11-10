@@ -134,7 +134,7 @@ interpretIx _ (Var v) = GUBS.variable v
 interpretIx inter (Sum ixs) = sum (interpretIx inter `map` ixs)
 interpretIx inter (Succ ix) = GUBS.constant 1 + interpretIx inter ix
 interpretIx inter (Fun f ixs) = p `GUBS.apply` (interpretIx inter `map` ixs) where
-  p = case GUBS.get inter f of
+  p = case GUBS.get inter f (length ixs) of
         Just p' -> p'
         Nothing -> fromInteger 0
 
