@@ -62,7 +62,17 @@ abstraction cfg = kca (clength cfg)
 startSymbols :: HoSA -> Maybe [Symbol]
 startSymbols cfg = map sym <$> mains cfg where
   sym n = Symbol { symName = n, defined = True }
-                              
+
+
+smtOpts :: SMTOpts
+smtOpts =
+  SMTOpts { shape = MultMixed
+          , degree = 2
+          , maxCoeff = Nothing
+          , maxConst = Nothing          
+          , maxPoly  = False
+          , minimize = True}
+          
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
@@ -73,25 +83,25 @@ constraintProcessor cfg =
     logStr str cs = logMsg str >> return (Progress cs)
     simple = 
       logStr "SMT: trying strongly linear interpretation"
-      ==> try (smt' defaultSMTOpts { degree = 1, maxCoeff = Just 1} )
+      ==> try (smt' smtOpts { degree = 1, maxCoeff = Just 1} )
       ==> logStr "SMT: trying linear interpretation"      
-      ==> try (smt' defaultSMTOpts { degree = 1 })
+      ==> try (smt' smtOpts { degree = 1 })
       ==> logStr "SMT: trying strongly multmixed interpretation"            
-      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Just 1})
+      ==> try (smt' smtOpts { degree = 2, maxCoeff = Just 1})
       ==> logStr "SMT: trying multmixed interpretation"            
-      ==> try (smt' defaultSMTOpts { degree = 2, maxCoeff = Nothing})
+      ==> try (smt' smtOpts { degree = 2, maxCoeff = Nothing })
       ==> logStr "SMT: trying mixed interpretation"                  
-      ==> try (smt' defaultSMTOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})
+      ==> try (smt' smtOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})
       ==> logStr "SMT: trying multmixed interpretation of degree 3"            
-      ==> try (smt' defaultSMTOpts { degree = 3, maxCoeff = Nothing})
+      ==> try (smt' smtOpts { degree = 3, maxCoeff = Nothing})
       ==> logStr "SMT: trying multmixed interpretation of degree 3"            
-      ==> try (smt' defaultSMTOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
+      ==> try (smt' smtOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
     smt' = smt (solver cfg)
     simplify =
       logStr "Simplification"
       ==> try instantiate
       ==> try eliminate
-      ==> try propagateEq
+      -- ==> try propagateEq
       ==> try (exhaustive (propagateUp <=> propagateDown))
 
 -- abstract schemas

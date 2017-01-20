@@ -38,7 +38,7 @@ import           Control.Monad.RWS
 import           Control.Monad.Trace
 import Control.Monad.Identity (Identity, runIdentity)
 import           Data.Function (on)
-import           Data.List (groupBy,sortBy,nub)
+import           Data.List (groupBy,sortBy)
 
 
 import qualified Text.PrettyPrint.ANSI.Leijen as PP

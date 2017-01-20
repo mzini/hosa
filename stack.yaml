@@ -1,16 +1,15 @@
+allow-newer: true
 flags: {}
 packages:
 - '.'
-- location:
-    git: git@github.com:mzini/monad-trace
-    commit: b75ce1b391cbdd14917feeee95166d55bef5c823
-- location:
-    git: git@github.com:mzini/gubs
-    commit: f7e86dab78cc4c593c954330f21d109b1f866d44
+- '../monad-trace'
+- '../gubs'
 extra-deps:
+- ifscs-0.2.0.0
+- glpk-hs-0.3.5
 - smtlib2-0.3.1
 - union-find-array-0.1.0.2
 - atto-lisp-0.2.2.2
 - data-fix-0.0.3
 - failure-0.2.0.3
-resolver: lts-5.10
+resolver: lts-7.11

@@ -1,9 +1,9 @@
 module HoSA.SizeType.SOConstraint where
 
 import           Control.Arrow (first)
-import           Control.Monad (forM_, void, filterM, when, (>=>), forM)
+import           Control.Monad (forM_, void, filterM, when, forM)
 import           Data.Tree (Forest)
-import           Data.List ((\\),groupBy,sortBy,nub)
+import           Data.List ((\\))
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import           Data.Maybe (fromMaybe, isNothing, fromJust)
@@ -13,6 +13,8 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Control.Monad.IO.Class (MonadIO)
 
 import qualified GUBS
+import           GUBS.Algebra
+import qualified GUBS.MaxPolynomial as Poly
 
 import           HoSA.Data.Index
 import           HoSA.Data.SizeType hiding (metaVars)
@@ -29,7 +31,7 @@ type FOCS = [Constraint]
 data SOCS = SOCS [Constraint] [DConstraint]
 
 type Interpretation = GUBS.Interpretation Sym
-type Polynomial = GUBS.Polynomial Var
+type Polynomial = GUBS.MaxPoly Var
 type Processor m = GUBS.Processor Sym Integer V m
 
 instance Monoid SOCS where
@@ -114,12 +116,12 @@ toGubsCS :: FOCS -> GubsCS
 toGubsCS = map gconstraint where
   gconstraint (l :>=: r) = gterm l GUBS.:>=: gterm r
   -- gconstraint (l :=: r)  = gterm l GUBS.:=: gterm r
-  gterm Zero           = 0
-  gterm (Succ ix)      = gterm ix + 1
-  gterm (Sum ixs)      = sum [gterm ix | ix <- ixs]
-  gterm (Var (FVar v)) =  GUBS.Var (V v)
-  gterm (Var (BVar _)) =  error "toCS: constraint list contains bound variable"
-  gterm (Fun f ixs)    = GUBS.Fun f (gterm `map` ixs)
+  gterm Zero           = zero
+  gterm (Succ ix)      = gterm ix .+ fromNatural 1
+  gterm (Sum ixs)      = sumA [gterm ix | ix <- ixs]
+  gterm (Var (FVar v)) = GUBS.variable (V v)
+  gterm (Var (BVar _)) = error "toCS: constraint list contains bound variable"
+  gterm (Fun f ixs)    = GUBS.fun f (gterm `map` ixs)
   gterm (MVar mv)      =
     case unsafePeakMetaVar mv of
       Left _ -> error "toCS: unset meta variable"
@@ -128,24 +130,24 @@ toGubsCS = map gconstraint where
 
 -- interpretation
 -- TODO 
-interpretIx :: (Eq c, Num c) => Interpretation c -> Term -> Polynomial c
-interpretIx _ Zero = GUBS.constant 0
-interpretIx _ (Var v) = GUBS.variable v
-interpretIx inter (Sum ixs) = sum (interpretIx inter `map` ixs)
-interpretIx inter (Succ ix) = GUBS.constant 1 + interpretIx inter ix
+interpretIx :: (Eq c, SemiRing c) => Interpretation c -> Term -> Polynomial c
+interpretIx _ Zero = zero
+interpretIx _ (Var v) = Poly.variable v
+interpretIx inter (Sum ixs) = sumA (interpretIx inter `map` ixs)
+interpretIx inter (Succ ix) = one .+ interpretIx inter ix
 interpretIx inter (Fun f ixs) = p `GUBS.apply` (interpretIx inter `map` ixs) where
   p = case GUBS.get inter f (length ixs) of
         Just p' -> p'
-        Nothing -> fromInteger 0
+        Nothing -> zero
 
-interpretType :: (Eq c, Num c) => Interpretation c -> SizeType knd Term -> SizeType knd (Polynomial c)
+interpretType :: (Eq c, SemiRing c) => Interpretation c -> SizeType knd Term -> SizeType knd (Polynomial c)
 interpretType _     (SzVar v)        = SzVar v
 interpretType inter (SzCon n ts ix)  = SzCon n (interpretType inter `map` ts) (interpretIx inter ix)
 interpretType inter (SzPair t1 t2)   = SzPair (interpretType inter t1) (interpretType inter t2)
 interpretType inter (SzArr n t)      = SzArr (interpretType inter n) (interpretType inter t)
 interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (interpretType inter t)
 
-interpretSig :: (Eq c, Num c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
+interpretSig :: (Eq c, SemiRing c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
 interpretSig inter = Map.map (interpretType inter)
 
 -- putting things together
