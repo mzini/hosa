@@ -70,13 +70,13 @@ smtOpts =
           , degree = 2
           , maxCoeff = Nothing
           , maxConst = Nothing          
-          , maxPoly  = False
+          , maxPoly  = True
           , minimize = True}
           
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
-    Simple -> try simplify ==> logCS ==> simple
+    Simple -> try simplify ==> simple ==> logCS
     SCC -> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple)))
   where
     logCS cs = logOpenConstraints cs >> return (Progress cs)
@@ -101,7 +101,6 @@ constraintProcessor cfg =
       logStr "Simplification"
       ==> try instantiate
       ==> try eliminate
-      -- ==> try propagateEq
       ==> try (exhaustive (propagateUp <=> propagateDown))
 
 -- abstract schemas
@@ -111,7 +110,13 @@ freshIxTerm :: MonadUnique m => Set.Set Ix.VarId -> m Ix.Term
 freshIxTerm vs = do
   f <- Ix.Sym Nothing <$> unique
   return (Ix.Fun f (Ix.bvar `map` Set.toList vs))
-  
+
+freshIxTermFor :: (IsSymbol f, MonadUnique m) => f -> Set.Set Ix.VarId -> m Ix.Term
+freshIxTermFor f vs
+  | isDefined f = freshIxTerm vs
+  | Set.null vs = return Ix.ixZero
+  | otherwise   = return (Ix.ixSucc (Ix.ixSum [Ix.bvar v | v <- Set.toList vs]))
+                 
 close :: Type Ix.Term -> Schema Ix.Term
 close (SzVar v)       = SzVar v
 close (SzCon n ts ix) = SzCon n ts ix
@@ -150,9 +155,7 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
                               ts
       is <- freshVarIds w
       let vs' = Set.fromList is `Set.union` vs
-      ix <- if isDefined f
-            then lift (freshIxTerm vs')
-            else return (Ix.ixSucc (Ix.ixSum [Ix.bvar v | v <- Set.toList vs']))
+      ix <- freshIxTermFor f vs'
       return (fvsp, vs' `Set.union` fvsp,SzCon n as ix)
     annotatePositive w vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotatePositive w vs tp1
@@ -201,9 +204,7 @@ abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositi
                               ts
       is <- freshVarIds w
       let vs' = Set.fromList is `Set.union` vs
-      ix <- if isDefined f
-            then lift (freshIxTerm vs')
-            else return (Ix.ixSucc (Ix.ixSum [Ix.bvar v | v <- Set.toList vs']))
+      ix <- freshIxTermFor f vs'
       return (fvsp, vs' `Set.union` fvsp,SzCon n as ix)
     annotatePositive w vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotatePositive w vs tp1

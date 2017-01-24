@@ -233,7 +233,7 @@ instantiate s = do
 --   return (SzArr (Ix.inst s n) (Ix.inst s p))
 
 subtypeOf :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
-t1 `subtypeOf` t2 = t1 `subtypeOf_` t2
+t1 `subtypeOf` t2 = t1 `subtypeOf_` t2 -- logBlk (PP.pretty t1 PP.<+> PP.text "`subtypeOf`" PP.<+> PP.pretty t2) $ 
 
 subtypeOf_ :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
 SzVar v1 `subtypeOf_` SzVar v2 | v1 == v2 = return []
