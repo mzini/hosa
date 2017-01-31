@@ -13,7 +13,7 @@ module HoSA.Data.Program.Types
   , Equation (..)
   , UntypedExpression
   , TypedExpression
-    -- * Equation  
+    -- * Equation
   , UntypedEquation
   , TypedEquation (..)
     -- * Programs
@@ -59,7 +59,7 @@ data Expression f v tp =
   | Pair (tp,tp) (Expression f v tp) (Expression f v tp)
   | Fun f tp Location
   | Apply tp (Expression f v tp) (Expression f v tp)
-  | LetP tp (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)  
+  | LetP tp (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)
 
 data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Expression f v tp }
 
@@ -74,7 +74,7 @@ type TypedExpression f v = Expression f v SimpleType
 data TypedEquation f v = TypedEquation { eqEnv :: Environment v
                                        , eqEqn :: Equation f v SimpleType
                                        , eqTpe :: SimpleType }
-                  
+
 data Program f v = Program { equations :: [TypedEquation f v]
                            , mainFns   :: [f]
                            , signature :: Signature f }
@@ -89,4 +89,4 @@ data TypingError f v =
   | IllformedConstructorType f SimpleType
   | VariableUndefined (UntypedEquation f v) v
   | ConstructorMissingSignature f
-    
+

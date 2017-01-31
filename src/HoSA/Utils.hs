@@ -5,7 +5,7 @@ module HoSA.Utils (
   , uniqueToInt
   , uniqueFromInt
   , MonadUnique (..)
-  , UniqueM    
+  , UniqueM
   , UniqueT
   , uniques
   , runUnique
@@ -45,14 +45,14 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 -- lists
 
-groupWith :: (Eq b, Ord b) => (a -> b) -> [a] -> [[a]]
+groupWith :: Ord b => (a -> b) -> [a] -> [[a]]
 groupWith f = groupBy (\eq1 eq2 -> f eq1 == f eq2) . sortBy (compare `on` f)
 
 -- monad utils
 
 scoped :: MonadState s m => m a -> m a
 scoped m = do { s <- get; a <- m; put s; return a }
-    
+
 concatMapM :: (Monad m, Monoid b) => (a -> m b) -> [a] -> m b
 concatMapM f xs = mconcat `liftM` (f `mapM` xs)
 
@@ -62,7 +62,7 @@ composeM = foldr (>=>) return
 assertJust :: MonadError e m => e -> Maybe a -> m a
 assertJust err = maybe (throwError err) return
 
-assertRight :: MonadError e m => (l -> e) -> (Either l r) -> m r
+assertRight :: MonadError e m => (l -> e) -> Either l r -> m r
 assertRight err = either (throwError . err) return
 
 -- pretty printing
@@ -101,8 +101,8 @@ uniqueFromInt = Unique
 
 newtype UniqueT m a = UniqueT { runUniqueT_ :: StateT Unique m a }
                       deriving (Applicative, Functor, Monad, MonadIO)
-                               
-type UniqueM = UniqueT Identity                               
+
+type UniqueM = UniqueT Identity
 
 demand :: Monad m => UniqueT m Unique
 demand = getU <* modifyU (\ (Unique i) -> Unique (i+1)) where
@@ -121,7 +121,7 @@ runUniqueT = runUniqueWithoutT []
 
 runUniqueWithout :: [Unique] -> UniqueM a -> a
 runUniqueWithout vs = runIdentity . runUniqueWithoutT vs
-  
+
 runUnique :: UniqueM a -> a
 runUnique = runIdentity . runUniqueT
 
@@ -145,7 +145,7 @@ uniques n = replicateM n unique
 instance MonadUnique m => MonadUnique (ExceptT e m) where
   unique = lift unique
   reset = lift reset
-  
+
 instance MonadUnique m => MonadUnique (TraceT t m) where
   unique = lift unique
   reset = lift reset
@@ -161,9 +161,9 @@ instance MonadUnique m => MonadUnique (ReaderT t m) where
 instance (Monoid w, MonadUnique m) => MonadUnique (RWST r w s m) where
   unique = lift unique
   reset = lift reset
-  
+
 instance (Monoid w, MonadUnique m) => MonadUnique (WriterT w m) where
   unique = lift unique
   reset = lift reset
 
-  
+

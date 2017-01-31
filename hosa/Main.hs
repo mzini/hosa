@@ -70,7 +70,7 @@ smtOpts =
           , degree = 2
           , maxCoeff = Nothing
           , maxConst = Nothing          
-          , maxPoly  = True
+          , maxPoly  = False
           , minimize = True}
           
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
