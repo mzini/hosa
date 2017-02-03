@@ -170,7 +170,10 @@ logObligation :: MonadTrace PP.Doc m => (PP.Pretty f, PP.Pretty v) => Obligation
 logObligation = logMsg
 
 footprint :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SizeTypedExpression f v -> InferM f v (Footprint v)
-footprint l = logBlk (PP.text "Footprint of" PP.<+> PP.squotes (PP.pretty l)) $ fpInfer l
+footprint l = do
+  fp <- fpInfer l
+  logMsg (PP.text "Footprint of" PP.<+> PP.squotes (PP.pretty l) PP.<> PP.text ":" PP.<+> PP.pretty fp)
+  return fp
   where
     fpInfer (Fun (_,s) _ _) = do
       (_, tp) <- rename s >>= matrix
@@ -226,19 +229,34 @@ instantiate s = do
   (vs,tp) <- matrix s
   subst <- Ix.substFromList <$> sequence [ (v,) <$> skolemVar | v <- vs]
   return (subst `Ix.o` tp)
--- instantiate (SzBase bt ix) = return (SzBase bt ix)
--- instantiate (SzList t ix) = SzList <$> (instantiate t) <*> return ix
--- instantiate (SzQArr ixs n p) = do
---   s <- Ix.substFromList <$> sequence [ (ix,) <$> skolemVar | ix <- ixs]
---   return (SzArr (Ix.inst s n) (Ix.inst s p))
+
+soSuperType,soSubType :: SizeType knd Ix.Term -> InferCG f v (SizeType knd Ix.Term)
+soSuperType (SzVar v)       = return (SzVar v)
+soSuperType (SzCon n as ix) = SzCon n <$> mapM soSuperType as <*> fresh
+  where fresh = do {ix' <- skolemVar; require (ix' :>=: ix); return ix'}
+soSuperType (SzPair t1 t2)   = SzPair <$> soSuperType t1 <*> soSuperType t2
+soSuperType (SzArr n p)      = SzArr <$> soSubType n <*> soSuperType p
+soSuperType (SzQArr vs n p)  = SzQArr vs <$> soSubType n <*> soSuperType p
+
+soSubType (SzVar v)       = return (SzVar v)
+soSubType (SzCon n as ix) = SzCon n <$> mapM soSubType as <*> fresh
+  where fresh = do {ix' <- skolemVar; require (ix :>=: ix'); return ix'}
+soSubType (SzPair t1 t2)   = SzPair <$> soSubType t1 <*> soSubType t2
+soSubType (SzArr n p)      = SzArr <$> soSuperType n <*> soSubType p
+soSubType (SzQArr vs n p)  = SzQArr vs <$> soSuperType n <*> soSubType p
+
 
 subtypeOf :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
 t1 `subtypeOf` t2 = t1 `subtypeOf_` t2 -- logBlk (PP.pretty t1 PP.<+> PP.text "`subtypeOf`" PP.<+> PP.pretty t2) $ 
 
 subtypeOf_ :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
 SzVar v1 `subtypeOf_` SzVar v2 | v1 == v2 = return []
-SzVar v  `subtypeOf_` t = return [ (v, toSchema t) ]
-t `subtypeOf_` SzVar v = return [ (v, toSchema t) ]
+SzVar v  `subtypeOf_` t = do
+  t' <- soSuperType t
+  return [ (v, toSchema t') ]
+t `subtypeOf_` SzVar v = do
+  t' <- soSubType t
+  return [ (v, toSchema t') ]
 SzCon n ts1 ix1 `subtypeOf_` SzCon m ts2 ix2 | n == m = do
   require (ix2 :>=: ix1)
   sig <- Map.filterWithKey (\ f _ -> isConstructor f) <$> simpleSignature

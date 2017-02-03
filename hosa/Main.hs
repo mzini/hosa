@@ -70,7 +70,7 @@ smtOpts =
           , degree = 2
           , maxCoeff = Nothing
           , maxConst = Nothing          
-          , maxPoly  = False
+          , maxPoly  = True
           , minimize = True}
           
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
@@ -343,7 +343,7 @@ timeAnalysis p = do
   let (ticked,aux) = tickProgram p
   status "Instrumented program" ticked
   status "Auxiliary equations" aux
-  -- status "Abstract signature" (abstractSignature w)
+  status "Abstract signature" (abstractSignature w)
   infer (abstractSignature w) ticked >>= putSolution ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
@@ -365,7 +365,7 @@ sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  -- status "AbstractSignature" (abstractSignature w)
+  status "AbstractSignature" (abstractSignature w)
   infer (abstractSignature w) p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))

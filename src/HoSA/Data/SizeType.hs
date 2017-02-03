@@ -31,6 +31,7 @@ instance Foldable (SizeType knd) where
   foldr f z (SzArr p n) = foldr f (foldr f z n) p
   foldr f z (SzQArr _ p n) = foldr f (foldr f z n) p  
 
+
 type Type = SizeType 'T
 type Schema = SizeType 'S
 
@@ -71,8 +72,6 @@ matrix (SzPair s1 s2) = do
   (vs2,t2) <- matrix s2
   return (vs1 ++ vs2, SzPair t1 t2)
 matrix (SzCon n ss ix) = return ([], SzCon n ss ix)
-  -- l <- matrix `mapM` ss
-  -- return (concat (fst `map` l), SzCon n (snd `map` l) ix )
 matrix (SzQArr ixs n p) = do
   ixs' <- sequence [ uniqueToInt <$> unique | _ <- ixs]
   let subst = Ix.substFromList (zip ixs (Ix.fvar `map` ixs'))
@@ -82,6 +81,16 @@ returnIndex :: MonadUnique m => SizeType knd Ix.Term -> m Ix.Term
 returnIndex (SzCon _ _ ix) = return ix
 returnIndex (SzArr _ p)    = returnIndex p
 returnIndex s@SzQArr{}     = matrix s >>= returnIndex . snd
+
+traverseB :: Applicative f => ([Ix.VarId] -> ix -> f ix') -> SizeType knd ix -> f (SizeType knd ix')
+traverseB = walk [] where
+  walk :: Applicative f => [Ix.VarId] -> ([Ix.VarId] -> ix -> f ix') -> SizeType knd ix -> f (SizeType knd ix')
+  walk _ _  (SzVar v)        = pure (SzVar v)
+  walk bv f (SzCon n as ix)  = SzCon n <$> traverse (walk bv f) as <*> f bv ix
+  walk bv f (SzPair t1 t2)   = SzPair <$> walk bv f t1 <*> walk bv f t2
+  walk bv f (SzArr n p)      = SzArr <$> walk bv f n <*> walk bv f p
+  walk bv f (SzQArr vs n p)  = SzQArr vs <$> walk bv' f n <*> walk bv' f p
+    where bv' = vs ++ bv
 
 
 type TypeOrSchema ix = Either (Type ix) (Schema ix)
