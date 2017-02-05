@@ -70,32 +70,35 @@ smtOpts =
           , degree = 2
           , maxCoeff = Nothing
           , maxConst = Nothing          
-          , maxPoly  = True
-          , minimize = True}
+          , maxPoly  = False
+          , minimize = MinimizeIterate 5}
           
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
-    Simple -> try simplify ==> simple ==> logCS
-    SCC -> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple)))
+    Simple -> try simplify ==> simple ==> logCS ==> logInter
+    SCC -> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple))) ==> logInter
   where
     logCS cs = logOpenConstraints cs >> return (Progress cs)
+    logInter cs = logInterpretation >> return (Progress cs)
     logStr str cs = logMsg str >> return (Progress cs)
-    simple = 
+    simple =
+--      logStr "SMT: trying strongly linear max interpretation"
+--      ==> try (smt' smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True} )
       logStr "SMT: trying strongly linear interpretation"
       ==> try (smt' smtOpts { degree = 1, maxCoeff = Just 1} )
       ==> logStr "SMT: trying linear interpretation"      
       ==> try (smt' smtOpts { degree = 1 })
       ==> logStr "SMT: trying strongly multmixed interpretation"            
-      ==> try (smt' smtOpts { degree = 2, maxCoeff = Just 1})
-      ==> logStr "SMT: trying multmixed interpretation"            
-      ==> try (smt' smtOpts { degree = 2, maxCoeff = Nothing })
-      ==> logStr "SMT: trying mixed interpretation"                  
-      ==> try (smt' smtOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})
-      ==> logStr "SMT: trying multmixed interpretation of degree 3"            
-      ==> try (smt' smtOpts { degree = 3, maxCoeff = Nothing})
-      ==> logStr "SMT: trying multmixed interpretation of degree 3"            
-      ==> try (smt' smtOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
+      -- ==> try (smt' smtOpts { degree = 2, maxCoeff = Just 1})
+      -- ==> logStr "SMT: trying multmixed interpretation"            
+      -- ==> try (smt' smtOpts { degree = 2, maxCoeff = Nothing })
+      -- ==> logStr "SMT: trying mixed interpretation"                  
+      -- ==> try (smt' smtOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})
+      -- ==> logStr "SMT: trying multmixed interpretation of degree 3"            
+      -- ==> try (smt' smtOpts { degree = 3, maxCoeff = Nothing})
+      -- ==> logStr "SMT: trying multmixed interpretation of degree 3"            
+      -- ==> try (smt' smtOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
     smt' = smt (solver cfg)
     simplify =
       logStr "Simplification"
@@ -155,7 +158,7 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
                               ts
       is <- freshVarIds w
       let vs' = Set.fromList is `Set.union` vs
-      ix <- freshIxTermFor f vs'
+      ix <- lift (freshIxTermFor f vs')
       return (fvsp, vs' `Set.union` fvsp,SzCon n as ix)
     annotatePositive w vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotatePositive w vs tp1
@@ -204,7 +207,7 @@ abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositi
                               ts
       is <- freshVarIds w
       let vs' = Set.fromList is `Set.union` vs
-      ix <- freshIxTermFor f vs'
+      ix <- lift (freshIxTermFor f vs')
       return (fvsp, vs' `Set.union` fvsp,SzCon n as ix)
     annotatePositive w vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotatePositive w vs tp1
