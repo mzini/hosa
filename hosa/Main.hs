@@ -76,21 +76,21 @@ smtOpts =
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
-    Simple -> try simplify ==> simple ==> logCS ==> logInter
-    SCC -> try simplify ==> logCS ==> try (exhaustive (sccDecompose (logCS ==> try simplify ==> simple))) ==> logInter
+    Simple -> simple
+    SCC -> withLog $ try simplify ==> try (exhaustive (logAs "SCC" (sccDecompose simple)))
   where
-    logCS cs = logOpenConstraints cs >> return (Progress cs)
-    logInter cs = logInterpretation >> return (Progress cs)
-    logStr str cs = logMsg str >> return (Progress cs)
+    withLog p cs = 
+      logOpenConstraints cs *> p cs <* logInterpretation cs
+      
+    logAs str p cs = logBlk (str++"...") (p cs)
     simple =
---      logStr "SMT: trying strongly linear max interpretation"
---      ==> try (smt' smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True} )
-      logStr "SMT: trying strongly linear interpretation"
-      ==> try (smt' smtOpts { degree = 1, maxCoeff = Just 1} )
-      ==> logStr "SMT: trying linear interpretation"      
-      ==> try (smt' smtOpts { degree = 1 })
-      ==> logStr "SMT: trying strongly multmixed interpretation"            
-      -- ==> try (smt' smtOpts { degree = 2, maxCoeff = Just 1})
+      logAs "SOLVE" $ withLog $
+        try simplify
+        ==> logAs "SMT-MaxSLI" (try (smt' smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True, minimize = MinimizeIterate 0}))  
+        ==> logAs "SMT-SLI" (try (smt' smtOpts { degree = 1, maxCoeff = Just 1 }))
+        ==> logAs "SMT-LI" (try (smt' smtOpts { degree = 1 }))
+        ==> logAs "SMT-MMI(2)" (try (smt' smtOpts { degree = 2}))
+        ==> logAs "SMT-MI(2)" (try (smt' smtOpts { degree = 2, shape = Mixed}))                
       -- ==> logStr "SMT: trying multmixed interpretation"            
       -- ==> try (smt' smtOpts { degree = 2, maxCoeff = Nothing })
       -- ==> logStr "SMT: trying mixed interpretation"                  
@@ -100,11 +100,11 @@ constraintProcessor cfg =
       -- ==> logStr "SMT: trying multmixed interpretation of degree 3"            
       -- ==> try (smt' smtOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
     smt' = smt (solver cfg)
-    simplify =
-      logStr "Simplification"
-      ==> try instantiate
-      ==> try eliminate
-      ==> try (exhaustive (propagateUp <=> propagateDown))
+    simplify = 
+      logAs "Simplification" $
+        try instantiate
+        ==> try eliminate
+        ==> try (exhaustive (propagateUp <=> propagateDown))
 
 -- abstract schemas
 ----------------------------------------------------------------------
@@ -280,7 +280,8 @@ ppForest :: PP.Pretty p => Forest p -> PP.Doc
 ppForest ts = PP.vcat [PP.text "+" PP.<+> ppTree t | t <- ts]
 
 ppTree :: PP.Pretty p => Tree p -> PP.Doc
-ppTree (Node n ts) = PP.group (PP.pretty n) PP.<$$> PP.text "" PP.<$$> PP.indent 2 (ppForest ts)
+ppTree (Node n []) = PP.group (PP.pretty n)
+ppTree (Node n ts) = PP.group (PP.pretty n) PP.<$$> PP.indent 2 (ppForest ts) PP.<$$> PP.text "" 
                                
 -- commands
 ----------------------------------------------------------------------

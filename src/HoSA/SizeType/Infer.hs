@@ -247,15 +247,15 @@ soSubType (SzQArr vs n p)  = SzQArr vs <$> soSuperType n <*> soSubType p
 
 
 subtypeOf :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
-t1 `subtypeOf` t2 = t1 `subtypeOf_` t2 -- logBlk (PP.pretty t1 PP.<+> PP.text "`subtypeOf`" PP.<+> PP.pretty t2) $ 
+t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.<+> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2 -- 
 
 subtypeOf_ :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
 SzVar v1 `subtypeOf_` SzVar v2 | v1 == v2 = return []
 SzVar v  `subtypeOf_` t = do
-  t' <- soSuperType t
+  t' <- soSubType t
   return [ (v, toSchema t') ]
 t `subtypeOf_` SzVar v = do
-  t' <- soSubType t
+  t' <- soSuperType t
   return [ (v, toSchema t') ]
 SzCon n ts1 ix1 `subtypeOf_` SzCon m ts2 ix2 | n == m = do
   require (ix2 :>=: ix1)
@@ -265,43 +265,47 @@ SzCon n ts1 ix1 `subtypeOf_` SzCon m ts2 ix2 | n == m = do
   foldM (\ subst (s1,s2) -> do
             s1' <- substituteTyVars subst s1
             s2' <- substituteTyVars subst s2
-            subst' <- s1' `subtypeOf` s2'
+            subst' <- s1' `subtypeOf_` s2'
             subst' `after` subst) [] l
 SzArr n p `subtypeOf_` SzArr m q = do
-  subst1 <- m `subtypeOf` n
+  subst1 <- m `subtypeOf_` n
   p' <- substituteTyVars subst1 p
   q' <- substituteTyVars subst1 q
-  subst2 <- p' `subtypeOf` q'
+  subst2 <- p' `subtypeOf_` q'
   subst2 `after` subst1
 s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do 
   (vs,t1) <- matrix s1
   t2' <- instantiate s2
-  subst <- t1 `subtypeOf` t2'
+  subst <- t1 `subtypeOf_` t2'
   mvs1 <- metaVars <$> substituteTyVars subst t1
   mvs2 <- metaVars <$> substituteTyVars subst t2'
   void (logBlk (PP.text "occurs check") (notOccur vs `mapM` (mvs1 ++ mvs2)))
   return subst
 SzPair s1 s2 `subtypeOf_` SzPair t1 t2 = do
-  subst1 <- s1 `subtypeOf` t1
+  subst1 <- s1 `subtypeOf_` t1
   s2' <- substituteTyVars subst1 s2
   t2' <- substituteTyVars subst1 t2
-  subst2 <- s2' `subtypeOf` t2'
+  subst2 <- s2' `subtypeOf_` t2'
   subst2 `after` subst1
 s `subtypeOf_` n = throwError (MatchFailure s n)
 
-inferSizeType :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedExpression f v -> InferCG f v (TypingContext v, Type Ix.Term)
-inferSizeType ctx t@(Var v _) = do
+inferSizeType_,inferSizeType :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedExpression f v -> InferCG f v (TypingContext v, Type Ix.Term)
+inferSizeType ctx t = logBlk (PP.text "Infer" PP.<+> PP.squotes (PP.pretty t) PP.<+> PP.text "...") $  do
+  (ctx',tp) <- inferSizeType_ ctx t
+  logMsg (ctx',(t,tp))
+  return (ctx',tp)
+inferSizeType_ ctx t@(Var v _) = do
   tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= either return instantiate 
   return (ctx,tp)
-inferSizeType ctx t@(Fun (_,s) _ _) = do
+inferSizeType_ ctx t@(Fun (_,s) _ _) = do
   tp <- rename s >>= instantiate
   return (ctx,tp)
-inferSizeType ctx t@(Pair _ t1 t2) =  do
+inferSizeType_ ctx t@(Pair _ t1 t2) =  do
   (ctx1, tp1) <- inferSizeType ctx t1
   (ctx2, tp2) <- inferSizeType ctx1 t2
   let tp = SzPair tp1 tp2
   return (ctx2,tp)
-inferSizeType ctx t@(Apply _ t1 t2) = do
+inferSizeType_ ctx t@(Apply _ t1 t2) = do
   (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of
     SzArr sArg tBdy -> do
@@ -313,7 +317,7 @@ inferSizeType ctx t@(Apply _ t1 t2) = do
       tBdy' <- substituteTyVars subst tBdy
       return (ctx2',tBdy')
     _ -> throwError (IlltypedTerm t1 "function type" tp1)
-inferSizeType ctx t@(LetP _ t1 ((x,_),(y,_)) t2) = do
+inferSizeType_ ctx t@(LetP _ t1 ((x,_),(y,_)) t2) = do
   (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of
     SzPair tpx tpy -> do
