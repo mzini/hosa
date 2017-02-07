@@ -38,7 +38,6 @@ data HoSA = HoSA { width :: Int
                  , solver :: SMTSolver
                  , verbose :: Bool
                  , mains :: Maybe [String]
-                 -- , properSized :: Maybe [String]
                  , smtStrategy :: SMTStrategy
                  , analyse :: AnalysisType
                  , input :: FilePath}
@@ -84,13 +83,15 @@ constraintProcessor cfg =
       
     logAs str p cs = logBlk (str++"...") (p cs)
     simple =
-      logAs "SOLVE" $ withLog $
+      logAs "SOLVE" $ timed $ withLog $
         try simplify
-        ==> logAs "SMT-MaxSLI" (try (smt' smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True, minimize = MinimizeIterate 0}))  
-        ==> logAs "SMT-SLI" (try (smt' smtOpts { degree = 1, maxCoeff = Just 1 }))
-        ==> logAs "SMT-LI" (try (smt' smtOpts { degree = 1 }))
-        ==> logAs "SMT-MMI(2)" (try (smt' smtOpts { degree = 2}))
-        ==> logAs "SMT-MI(2)" (try (smt' smtOpts { degree = 2, shape = Mixed}))                
+        ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True, minimize = MinimizeIterate 7})
+        ==> try (smt' "SMT-SLI" smtOpts { degree = 1, maxCoeff = Just 1 })
+        ==> try (smt' "SMT-LI" smtOpts { degree = 1 })
+        ==> try (smt' "SMT-MMI(2)" smtOpts { degree = 2})
+        ==> try (smt' "SMT-MI(2)" smtOpts { degree = 2, shape = Mixed})
+        ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
+        ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
       -- ==> logStr "SMT: trying multmixed interpretation"            
       -- ==> try (smt' smtOpts { degree = 2, maxCoeff = Nothing })
       -- ==> logStr "SMT: trying mixed interpretation"                  
@@ -99,7 +100,7 @@ constraintProcessor cfg =
       -- ==> try (smt' smtOpts { degree = 3, maxCoeff = Nothing})
       -- ==> logStr "SMT: trying multmixed interpretation of degree 3"            
       -- ==> try (smt' smtOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
-    smt' = smt (solver cfg)
+    smt' n o = logAs n $ timed $ smt (solver cfg) o
     simplify = 
       logAs "Simplification" $
         try instantiate
