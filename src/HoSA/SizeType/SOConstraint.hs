@@ -129,34 +129,40 @@ toGubsCS = map gconstraint where
 
 
 -- interpretation
--- TODO 
-interpretIx :: (Eq c, SemiRing c) => Interpretation c -> Term -> Polynomial c
-interpretIx _ Zero = zero
-interpretIx _ (Var v) = Poly.variable v
-interpretIx inter (Sum ixs) = sumA (interpretIx inter `map` ixs)
-interpretIx inter (Succ ix) = one .+ interpretIx inter ix
-interpretIx inter (Fun f ixs) = p `GUBS.apply` (interpretIx inter `map` ixs) where
-  p = case GUBS.get inter f (length ixs) of
-        Just p' -> p'
-        Nothing -> zero
+type PartialPolynomial c = Maybe (Polynomial c)
 
-interpretType :: (Eq c, SemiRing c) => Interpretation c -> SizeType knd Term -> SizeType knd (Polynomial c)
+interpretIx :: (Eq c, SemiRing c) => Interpretation c -> Term -> PartialPolynomial c
+interpretIx _ Zero = return zero
+interpretIx _ (Var v) = return (Poly.variable v)
+interpretIx inter (Sum ixs) = sumA <$> (interpretIx inter `mapM` ixs)
+interpretIx inter (Succ ix) = (.+) one <$> interpretIx inter ix
+interpretIx inter (Fun f ixs) = do
+  p <- GUBS.get inter f (length ixs)
+  GUBS.apply p <$> interpretIx inter `mapM` ixs
+
+interpretType :: (Eq c, SemiRing c) => Interpretation c -> SizeType knd Term -> SizeType knd (PartialPolynomial c)
 interpretType _     (SzVar v)        = SzVar v
 interpretType inter (SzCon n ts ix)  = SzCon n (interpretType inter `map` ts) (interpretIx inter ix)
 interpretType inter (SzPair t1 t2)   = SzPair (interpretType inter t1) (interpretType inter t2)
 interpretType inter (SzArr n t)      = SzArr (interpretType inter n) (interpretType inter t)
 interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (interpretType inter t)
 
-interpretSig :: (Eq c, SemiRing c) => Interpretation c -> Signature f Term -> Signature f (Polynomial c)
+interpretSig :: (Eq c, SemiRing c) => Interpretation c -> Signature f Term -> Signature f (PartialPolynomial c)
 interpretSig inter = Map.map (interpretType inter)
 
+instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, Max c, PP.Pretty c) => PP.Pretty (PartialPolynomial c) where
+  pretty Nothing = PP.text "?"
+  pretty (Just p) = PP.pretty p
+  
 -- putting things together
-solveConstraints :: (MonadUnique m, MonadIO m) => Processor m -> Signature f Term -> FOCS -> m (Maybe (Signature f (Polynomial Integer)), Forest String)
+type ConcreteSignature f = Signature f (PartialPolynomial Integer)
+                                       
+solveConstraints :: (MonadUnique m, MonadIO m) => Processor m -> Signature f Term -> FOCS -> m (Either (ConcreteSignature f) (ConcreteSignature f), Forest String)
 solveConstraints p sig focs = do
   first fromAnswer <$> (toGubsCS focs `GUBS.solveWith` p)
     where
-      fromAnswer (GUBS.Sat i) = Just (interpretSig i sig)
-      fromAnswer _ = Nothing
+      fromAnswer (GUBS.Sat i) = Right (interpretSig i sig)
+      fromAnswer (GUBS.Open _ i) = Left (interpretSig i sig)
 
 instance PP.Pretty V where
   pretty (V v) = PP.text "x" PP.<> PP.int v

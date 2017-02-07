@@ -258,14 +258,16 @@ data Error where
   ParseError :: ParseError -> Error
   SimpleTypeError :: (PP.Pretty f, PP.Pretty v) => TypingError f v -> Error
   SizeTypeError :: (PP.Pretty f, PP.Pretty v) => I.SzTypingError f v -> Error
-  ConstraintUnsolvable :: Error
+  ConstraintUnsolvable :: (IsSymbol f, PP.Pretty f, PP.Pretty v, Eq f) => Program f v -> SOCS.ConcreteSignature f -> Error
 
 instance PP.Pretty Error where
   pretty (ParseError e) = PP.indent 2 (PP.text (show e))
   pretty (SimpleTypeError e) = PP.indent 2 (PP.pretty e)
   pretty (SizeTypeError e) = PP.indent 2 (PP.pretty e)
-  pretty ConstraintUnsolvable = PP.text "Constraints cannot be solved"
-
+  pretty (ConstraintUnsolvable p sig) =
+    PP.indent 2 (PP.text "Partially annotated program:"
+                 PP.<$$> PP.indent 2 (prettyProgram p (Map.map ren sig)))
+    where ren = runUnique . SzT.rename
 
 type RunM = ExceptT Error (ReaderT HoSA (UniqueT IO))
 
@@ -321,7 +323,7 @@ readProgram = do
       parseFile = reader input >>= fromFile >>= assertRight ParseError
   
 
-infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> Program f v -> RunM (SzT.Signature f (SOCS.Polynomial Integer))
+infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> Program f v -> RunM (SOCS.ConcreteSignature f)
 infer sig p = generateConstraints >>= solveConstraints where
   generateConstraints = do
     (res,l) <- lift (lift (I.generateConstraints sig p))
@@ -331,9 +333,9 @@ infer sig p = generateConstraints >>= solveConstraints where
     pr <- reader constraintProcessor
     focs <- SOCS.toFOCS cs
     putExecLog [Node (PP.text "Generated FOCS") [Node (PP.pretty c) [] | c <- focs]]
-    (msig,l) <- lift (lift (SOCS.solveConstraints pr sig focs))
+    (esig,l) <- lift (lift (SOCS.solveConstraints pr sig focs))
     putExecLog l
-    assertJust ConstraintUnsolvable msig  
+    assertRight (ConstraintUnsolvable p) esig
 
 putSolution :: (Eq f, PP.Pretty f, PP.Pretty v, PP.Pretty ix, IsSymbol f) =>
   Program f v -> Map.Map f (SizeType knd ix) -> RunM ()
