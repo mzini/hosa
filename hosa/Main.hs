@@ -80,7 +80,8 @@ constraintProcessor cfg =
     simple =
       logAs "SOLVE" $ timed $ withLog $
         try simplify
-        ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True})
+        ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True,
+                                           minimize = tryM (iterM 3 zeroOut) `andThenM` tryM (iterM 3 shiftMax) `andThenM` iterM 3 decreaseCoeffs })
         ==> try (smt' "SMT-SLI" smtOpts { degree = 1, maxCoeff = Just 1 })
         ==> try (smt' "SMT-LI" smtOpts { degree = 1 })
         ==> try (smt' "SMT-MMI(2)" smtOpts { degree = 2})
