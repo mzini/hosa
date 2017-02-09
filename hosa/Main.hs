@@ -26,16 +26,17 @@ import qualified HoSA.SizeType.SOConstraint as SOCS
 import qualified HoSA.Data.SizeType as SzT
 import           HoSA.Data.SizeType (SizeType (..), Schema, Type)
 import           GUBS hiding (Symbol, Variable, Var, definedSymbol)
+import qualified GUBS.Solve.SMT as SMT
 
-deriving instance Typeable (SMTSolver)
-deriving instance Data (SMTSolver)
+deriving instance Typeable (SMT.Solver)
+deriving instance Data (SMT.Solver)
 
 data SMTStrategy = Simple | SCC deriving (Show, Data, Typeable)
 data AnalysisType = Time | Size deriving (Show, Data, Typeable)
 
 data HoSA = HoSA { width :: Int
                  , clength :: Int
-                 , solver :: SMTSolver
+                 , solver :: SMT.Solver
                  , verbose :: Bool
                  , mains :: Maybe [String]
                  , smtStrategy :: SMTStrategy
@@ -64,13 +65,7 @@ startSymbols cfg = map sym <$> mains cfg where
 
 
 smtOpts :: SMTOpts
-smtOpts =
-  SMTOpts { shape = MultMixed
-          , degree = 2
-          , maxCoeff = Nothing
-          , maxConst = Nothing          
-          , maxPoly  = False
-          , minimize = MinimizeIterate 5}
+smtOpts = SMT.defaultSMTOpts
           
 constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
@@ -85,21 +80,13 @@ constraintProcessor cfg =
     simple =
       logAs "SOLVE" $ timed $ withLog $
         try simplify
-        ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True, minimize = MinimizeIterate 7})
+        ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True})
         ==> try (smt' "SMT-SLI" smtOpts { degree = 1, maxCoeff = Just 1 })
         ==> try (smt' "SMT-LI" smtOpts { degree = 1 })
         ==> try (smt' "SMT-MMI(2)" smtOpts { degree = 2})
         ==> try (smt' "SMT-MI(2)" smtOpts { degree = 2, shape = Mixed})
         ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
         ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
-      -- ==> logStr "SMT: trying multmixed interpretation"            
-      -- ==> try (smt' smtOpts { degree = 2, maxCoeff = Nothing })
-      -- ==> logStr "SMT: trying mixed interpretation"                  
-      -- ==> try (smt' smtOpts { degree = 2, shape = Mixed, maxCoeff = Nothing})
-      -- ==> logStr "SMT: trying multmixed interpretation of degree 3"            
-      -- ==> try (smt' smtOpts { degree = 3, maxCoeff = Nothing})
-      -- ==> logStr "SMT: trying multmixed interpretation of degree 3"            
-      -- ==> try (smt' smtOpts { degree = 3, shape = Mixed, maxCoeff = Nothing})
     smt' n o = logAs n $ timed $ smt (solver cfg) o
     simplify = 
       logAs "Simplification" $

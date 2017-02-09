@@ -247,7 +247,7 @@ soSubType (SzQArr vs n p)  = SzQArr vs <$> soSuperType n <*> soSubType p
 
 
 subtypeOf :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
-t1 `subtypeOf` t2 = logBlk (PP.pretty t1 PP.<+> PP.text "⊑" PP.<+> PP.pretty t2) $ t1 `subtypeOf_` t2 -- 
+t1 `subtypeOf` t2 = t1 `subtypeOf_` t2 -- logBlk (PP.pretty t1 PP.<+> PP.text "⊑" PP.<+> PP.pretty t2) $ 
 
 subtypeOf_ :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
 SzVar v1 `subtypeOf_` SzVar v2 | v1 == v2 = return []
@@ -290,10 +290,7 @@ SzPair s1 s2 `subtypeOf_` SzPair t1 t2 = do
 s `subtypeOf_` n = throwError (MatchFailure s n)
 
 inferSizeType_,inferSizeType :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedExpression f v -> InferCG f v (TypingContext v, Type Ix.Term)
-inferSizeType ctx t = logBlk (PP.text "Infer" PP.<+> PP.squotes (PP.pretty t) PP.<+> PP.text "...") $  do
-  (ctx',tp) <- inferSizeType_ ctx t
-  logMsg (ctx',(t,tp))
-  return (ctx',tp)
+inferSizeType ctx t = inferSizeType_ ctx t
 inferSizeType_ ctx t@(Var v _) = do
   tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= either return instantiate 
   return (ctx,tp)

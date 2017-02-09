@@ -5,9 +5,8 @@ packages:
 - '../monad-trace'
 - '../gubs'
 extra-deps:
-- ifscs-0.2.0.0
-- glpk-hs-0.3.5
-- smtlib2-0.3.1
+- smtlib2-1.0
+- smtlib2-pipe-1.0
 - union-find-array-0.1.0.2
 - atto-lisp-0.2.2.2
 - data-fix-0.0.3
