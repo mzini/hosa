@@ -50,7 +50,7 @@ ident :: Parser String
 ident = many (try alphaNum <|> oneOf "'_/#?")
 
 variable :: Parser Variable
-variable = Variable <$> identifier ((:) <$> lower <*> ident) <?> "variable" where
+variable = Variable <$> identifier ((:) <$> lower <*> ident) <?> "variable"
 
 constructor :: Parser Symbol
 constructor = constr <$> identifier ((:) <$> (try upper <|> digit) <*> ident) <?> "constructor" where
@@ -88,7 +88,7 @@ enil = Fun NIL ()
 
 econs :: Location -> UntypedExpression Symbol v
       -> UntypedExpression Symbol v -> UntypedExpression Symbol v
-econs l h t = Apply () (Apply () (Fun CONS () l) h) t
+econs l h = Apply () (Apply () (Fun CONS () l) h)
 
 fun :: Symbol -> Parser (UntypedExpression Symbol Variable)
 fun f = Fun f () <$> freshLocation
@@ -152,13 +152,13 @@ eqP :: Parser (UntypedEquation Symbol Variable)
 eqP = do {l <- lhsP; reserved "="; r <- rhsP (fvars l); return (Equation l r); } <?> "equation"
 
 eqsP :: Parser [UntypedEquation Symbol Variable]
-eqsP = do {rs <- eqP `endBy` reserved ";"; return rs}
+eqsP = eqP `endBy` reserved ";"
 
 
 fromFile :: MonadIO m => FilePath -> m (Either ParseError [UntypedEquation Symbol Variable])
 fromFile file = runParser parser (uniqueFromInt 0) sn <$> liftIO (readFile file) where
   sn = "<file " ++ file ++ ">"
-  parser = many (try comment <|> whiteSpace1) *> (eqsP) <* eof
+  parser = many (try comment <|> whiteSpace1) *> eqsP <* eof
 
 
 

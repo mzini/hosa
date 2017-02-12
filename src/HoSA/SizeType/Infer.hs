@@ -48,7 +48,7 @@ newtype InferM f v a =
 runInferM :: Map.Map f SimpleType -> InferM f v a -> UniqueT IO (Either (SzTypingError f v) a, ExecutionLog)
 runInferM sig = runTraceT . runExceptT . flip runReaderT sig . runInferM_
   
-newtype InferCG f v a = InferCG { runInferCG_ :: WriterT (SOCS) (InferM f v) a }
+newtype InferCG f v a = InferCG { runInferCG_ :: WriterT SOCS (InferM f v) a }
   deriving (Applicative, Functor, Monad
             , MonadError (SzTypingError f v)
             , MonadWriter SOCS
@@ -143,7 +143,7 @@ instance TSubstitute (Type Ix.Term) where
       Just s -> snd <$> matrix s
   substituteTyVars subst (SzCon n ts ix)  =
     SzCon n <$> mapM (substituteTyVars subst) ts <*> return ix
-  substituteTyVars subst (SzArr n p) = do
+  substituteTyVars subst (SzArr n p) =
     SzArr <$> substituteTyVars subst n <*> substituteTyVars subst p
   substituteTyVars subst (SzPair s1 s2)   = SzPair <$> substituteTyVars subst s1 <*> substituteTyVars subst s2
 
@@ -162,15 +162,15 @@ instance TSubstitute (Schema Ix.Term) where
   substituteTyVars subst (SzPair s1 s2)   = SzPair <$> substituteTyVars subst s1 <*> substituteTyVars subst s2
 
 instance TSubstitute (TypingContext v) where
-  substituteTyVars subst ctx = mapM f ctx where
+  substituteTyVars subst = mapM f where
     f (Left t) = Left <$> substituteTyVars subst t
     f (Right t) = Right <$> substituteTyVars subst t
   
 logObligation :: MonadTrace PP.Doc m => (PP.Pretty f, PP.Pretty v) => Obligation f v -> m ()
 logObligation = logMsg
 
-footprint :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SizeTypedExpression f v -> InferM f v (Footprint v)
-footprint l = fpInfer l
+footprint :: Ord v => SizeTypedExpression f v -> InferM f v (Footprint v)
+footprint = fpInfer
   -- fp <- fpInfer l
   -- logMsg (PP.text "Footprint of" PP.<+> PP.squotes (PP.pretty l) PP.<> PP.text ":" PP.<+> PP.pretty fp)
   -- return fp
@@ -212,8 +212,8 @@ footprint l = fpInfer l
       return (si1 ++ si2, st1 ++ st2)
     fpMatch s          n                     = throwError (MatchFailure s n)
 
-obligations :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => Signature f Ix.Term -> Program f v -> InferM f v [Obligation f v]
-obligations sig p = mapM obligationsFor (eqEqn `map` equations p) where
+obligations :: (Ord f, Ord v) => Signature f Ix.Term -> Program f v -> InferM f v [Obligation f v]
+obligations sig p = mapM (obligationsFor . eqEqn) (equations p) where
   obligationsFor eq = do
     FP ctx tp <- footprint (annotate (lhs eq))
     return (Map.map Right ctx :- (annotate (rhs eq), tp))
@@ -290,19 +290,19 @@ SzPair s1 s2 `subtypeOf_` SzPair t1 t2 = do
 s `subtypeOf_` n = throwError (MatchFailure s n)
 
 inferSizeType_,inferSizeType :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => TypingContext v -> SizeTypedExpression f v -> InferCG f v (TypingContext v, Type Ix.Term)
-inferSizeType ctx t = inferSizeType_ ctx t
+inferSizeType = inferSizeType_
 inferSizeType_ ctx t@(Var v _) = do
   tp <- assertJust (IllformedRhs t) (Map.lookup v ctx) >>= either return instantiate 
   return (ctx,tp)
-inferSizeType_ ctx t@(Fun (_,s) _ _) = do
+inferSizeType_ ctx (Fun (_,s) _ _) = do
   tp <- rename s >>= instantiate
   return (ctx,tp)
-inferSizeType_ ctx t@(Pair _ t1 t2) =  do
+inferSizeType_ ctx (Pair _ t1 t2) =  do
   (ctx1, tp1) <- inferSizeType ctx t1
   (ctx2, tp2) <- inferSizeType ctx1 t2
   let tp = SzPair tp1 tp2
   return (ctx2,tp)
-inferSizeType_ ctx t@(Apply _ t1 t2) = do
+inferSizeType_ ctx (Apply _ t1 t2) = do
   (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of
     SzArr sArg tBdy -> do
@@ -314,7 +314,7 @@ inferSizeType_ ctx t@(Apply _ t1 t2) = do
       tBdy' <- substituteTyVars subst tBdy
       return (ctx2',tBdy')
     _ -> throwError (IlltypedTerm t1 "function type" tp1)
-inferSizeType_ ctx t@(LetP _ t1 ((x,_),(y,_)) t2) = do
+inferSizeType_ ctx (LetP _ t1 ((x,_),(y,_)) t2) = do
   (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of
     SzPair tpx tpy -> do
@@ -333,7 +333,7 @@ obligationToConstraints ob@(ctx :- (t, tp)) =  logBlk ob $ execInferCG $ do
 
 generateConstraints :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Signature f Ix.Term -> Program f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
-generateConstraints sig p = runInferM (signature p) $ do
+generateConstraints sig p = runInferM (signature p) $
   logBlk "Orientation constraints"
     (obligations sig p >>= concatMapM obligationToConstraints)
 

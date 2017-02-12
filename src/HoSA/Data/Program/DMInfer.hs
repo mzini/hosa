@@ -31,18 +31,6 @@ runInfer sig (InferM m) = second snd <$> runUniqueWithout vs (runExceptT (runSta
   where
     vs = foldl (flip fvsDL) [] (Map.elems sig)
 
-    -- TODO
-  -- subst <- fromMap <$> setConstructors [ (c,substitute s1 d) | (c,d) <- M.toList sig, isConstructor c ]
-  --   setConstructors tps = fst <$> execStateT (setConstructor `mapM` tps) (M.empty,0 :: Int)
-  --   setConstructor (c,returnType -> TyVar v)   = modify f where
-  --     f (m,i) = case M.lookup v m of
-  --                 Nothing -> (M.insert v (TyBase (BT (i + 1))) m, i+1)
-  --                 Just {} -> (m,i)
-  --   setConstructor (c,returnType -> TyBase {}) = return ()
-  --   setConstructor (c,returnType -> TyCon {})  = return ()    
-  --   setConstructor (c,tp)                      = throwError (IllformedConstructorType c tp)
-      
-
 freshTyExp :: MonadUnique m => m SimpleType
 freshTyExp = TyVar <$> unique
 
@@ -57,7 +45,7 @@ lookupFunTpe f = do
                return tp
            | otherwise = throwError (ConstructorMissingSignature f)
     inst tp = do
-       final <- Set.member f <$> fst <$> get
+       final <- Set.member f . fst <$> get
        if final
          then do 
          s <- substFromList <$> sequence [ (v,) <$> freshTyExp | v <- fvs tp ]
@@ -139,7 +127,7 @@ callSCCs eqs = map flattenSCC sccs'
                    , dsym eq' `elem` dsym eq : funs (rhs eq) ]
       where dsym = fst . definedSymbol
 
-inferTypes :: (Ord v, Eq f, Ord f, IsSymbol f) => [f] -> Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    
+inferTypes :: (Ord v, Ord f, IsSymbol f) => [f] -> Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    
 inferTypes mainFns initialSig eqns = walk (callSCCs eqns) [] initialSig where
   walk []         teqs sig = return (Program teqs mainFns sig)
   walk (scc:sccs) teqs sig = do

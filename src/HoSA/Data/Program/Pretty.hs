@@ -30,7 +30,7 @@ ppTuple (a,b) = PP.tupled [ PP.pretty a, PP.pretty b]
 
 instance PP.Pretty Symbol where
   pretty f | defined f = PP.bold (PP.text (symName f))
-           | otherwise = (PP.text (symName f))
+           | otherwise = PP.text (symName f)
                          
 instance PP.Pretty Variable where
   pretty = PP.text . varName

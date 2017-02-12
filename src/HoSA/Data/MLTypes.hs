@@ -72,7 +72,7 @@ type TypeSubstitution = TypeVariable -> SimpleType
 ----------------------------------------------------------------------
 
 equalModulo :: SimpleType -> SimpleType -> Bool
-tp1 `equalModulo` tp2 = tp1 `compare` tp2 == EQ
+tp1 `equalModulo` tp2 = tp1 == tp2
 
 compareModulo :: SimpleType -> SimpleType -> Ordering
 tp1 `compareModulo` tp2 = ren tp1 `compare` ren tp2
@@ -125,7 +125,8 @@ identSubst :: TypeSubstitution
 identSubst = TyVar
 
 singletonSubst :: TypeVariable -> SimpleType -> TypeSubstitution
-singletonSubst v tp = \ w -> if v == w then tp else TyVar w
+singletonSubst v tp w | v == w    = tp
+                      | otherwise = TyVar w
 
 substFromList :: [(TypeVariable,SimpleType)] -> TypeSubstitution
 substFromList m v = fromMaybe (TyVar v) (lookup v m)
@@ -140,7 +141,7 @@ instance TSubstitutable SimpleType where
   substitute s (tp1 :-> tp2) = substitute s tp1 :-> substitute s tp2
   
 instance TSubstitutable (Environment x) where
-  substitute s env = Map.map (substitute s) env
+  substitute s = Map.map (substitute s)
 
 instance (TSubstitutable a, TSubstitutable b) => TSubstitutable (a,b) where
   substitute s = substitute s *** substitute s
@@ -200,9 +201,9 @@ antiUnifyType a b = evalState (runUniqueT (step a b)) Map.empty where
     | tpa == tpb = return tpa
   step (TyCon n tpsa) (TyCon m tpsb)
     | n == m = TyCon n <$> zipWithM step tpsa tpsb
-  step (tpa1 :-> tpa2) (tpb1 :-> tpb2) = do
+  step (tpa1 :-> tpa2) (tpb1 :-> tpb2) = 
     (:->) <$> step tpa1 tpb1 <*> step tpa2 tpb2
-  step (tpa1 :*: tpa2) (tpb1 :*: tpb2) = do
+  step (tpa1 :*: tpa2) (tpb1 :*: tpb2) = 
     (:*:) <$> step tpa1 tpb1 <*> step tpa2 tpb2
   step tpa tpb = do
     m <- lift get
@@ -223,9 +224,9 @@ matchType a b = walk a b identSubst
       where img = subst v
     walk (TyCon n tpsa) (TyCon m tpsb)   subst
       | n == m    = composeM (zipWith walk tpsa tpsb) subst
-    walk (tpa1 :*: tpa2) (tpb1 :*: tpb2) subst = do
+    walk (tpa1 :*: tpa2) (tpb1 :*: tpb2) subst = 
       walk tpa1 tpb1 subst >>= walk tpa2 tpb2
-    walk (tpa1 :-> tpa2) (tpb1 :-> tpb2) subst = do
+    walk (tpa1 :-> tpa2) (tpb1 :-> tpb2) subst = 
       walk tpa1 tpb1 subst >>= walk tpa2 tpb2
     walk _               _               _     = Nothing
 

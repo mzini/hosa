@@ -117,7 +117,7 @@ toGubsCS = map gconstraint where
   gconstraint (l :>=: r) = gterm l GUBS.:>=: gterm r
   -- gconstraint (l :=: r)  = gterm l GUBS.:=: gterm r
   gterm Zero           = zero
-  gterm (Succ ix)      = gterm ix .+ fromNatural 1
+  gterm (Succ ix)      = gterm ix .+ fromNatural (1::Integer)
   gterm (Sum ixs)      = sumA [gterm ix | ix <- ixs]
   gterm (Var (FVar v)) = GUBS.variable (V v)
   gterm (Var (BVar _)) = error "toCS: constraint list contains bound variable"
@@ -132,13 +132,14 @@ toGubsCS = map gconstraint where
 type PartialPolynomial c = Maybe (Polynomial c)
 
 interpretIx :: (Eq c, SemiRing c) => Interpretation c -> Term -> PartialPolynomial c
-interpretIx _ Zero = return zero
-interpretIx _ (Var v) = return (Poly.variable v)
-interpretIx inter (Sum ixs) = sumA <$> (interpretIx inter `mapM` ixs)
-interpretIx inter (Succ ix) = (.+) one <$> interpretIx inter ix
+interpretIx _ Zero            = return zero
+interpretIx _ (Var v)         = return (Poly.variable v)
+interpretIx inter (Sum ixs)   = sumA <$> (interpretIx inter `mapM` ixs)
+interpretIx inter (Succ ix)   = (.+) one <$> interpretIx inter ix
 interpretIx inter (Fun f ixs) = do
   p <- GUBS.get inter f (length ixs)
   GUBS.apply p <$> interpretIx inter `mapM` ixs
+interpretIx _     MVar{}      = error "cannot interpret meta-variable"
 
 interpretType :: (Eq c, SemiRing c) => Interpretation c -> SizeType knd Term -> SizeType knd (PartialPolynomial c)
 interpretType _     (SzVar v)        = SzVar v
@@ -157,9 +158,8 @@ instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, Max c, PP.Pretty c) => 
 -- putting things together
 type ConcreteSignature f = Signature f (PartialPolynomial Integer)
                                        
-solveConstraints :: (MonadUnique m, MonadIO m) => Processor m -> Signature f Term -> FOCS -> m (Either (ConcreteSignature f) (ConcreteSignature f), Forest String)
-solveConstraints p sig focs = do
-  first fromAnswer <$> (toGubsCS focs `GUBS.solveWith` p)
+solveConstraints :: (MonadUnique m) => Processor m -> Signature f Term -> FOCS -> m (Either (ConcreteSignature f) (ConcreteSignature f), Forest String)
+solveConstraints p sig focs = first fromAnswer <$> (toGubsCS focs `GUBS.solveWith` p)
     where
       fromAnswer (GUBS.Sat i) = Right (interpretSig i sig)
       fromAnswer (GUBS.Open _ i) = Left (interpretSig i sig)

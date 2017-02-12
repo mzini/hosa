@@ -45,7 +45,9 @@ instance IsSymbol Symbol where
 isConstructor :: IsSymbol f => f -> Bool
 isConstructor = not . isDefined
 
+pattern NIL :: Symbol
 pattern NIL = Symbol "[]" False
+pattern CONS :: Symbol
 pattern CONS = Symbol "(:)" False
 
 ----------------------------------------------------------------------

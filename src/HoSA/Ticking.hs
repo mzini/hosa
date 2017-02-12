@@ -26,7 +26,7 @@ data TSymbol f = TSymbol f Int -- auxiliary symbols f_i
              | Tick -- tick constructor 
   deriving (Eq, Ord)
 
-instance IsSymbol f => IsSymbol (TSymbol f) where
+instance IsSymbol (TSymbol f) where
   isDefined TSymbol{} = True
   isDefined _         = False
   
@@ -39,7 +39,7 @@ type TickedProgram f v = Program (TSymbol f) (TVariable v)
 
 type ArityDecl f = f -> Int
 
-arity :: (Eq f, IsSymbol f, Ord f) => Program f v -> ArityDecl f
+arity :: (IsSymbol f, Ord f) => Program f v -> ArityDecl f
 arity p = \ f -> arities Map.! f where
   
   arities = Map.mapWithKey ar (signature p)
@@ -79,12 +79,14 @@ translatedType (t1 :*: t2)  = translatedType t1 :*: translatedType t2
 translatedType (t1 :-> t2)  = translatedType t1 :-> clockType :-> (translatedType t2 :*: clockType)
 
 auxType :: SimpleType -> Int -> SimpleType
-auxType tp 0 = clockType :-> (translatedType tp :*: clockType)
+auxType tp 0            = clockType :-> (translatedType tp :*: clockType)
 auxType (tp1 :-> tp2) i = translatedType tp1 :-> auxType tp2 (i - 1)
+auxType _ _             = error "auxType not defined on given type"
 
 constrType :: SimpleType -> SimpleType 
-constrType (t1 :-> t2) = translatedType t1 :-> constrType t2
+constrType (t1 :-> t2)  = translatedType t1 :-> constrType t2
 constrType (TyCon n ts) = TyCon n ts
+constrType  _           = error "auxType not defined on given type"
 
 -- symbols and variables
 
@@ -118,11 +120,12 @@ constrFun f = do
   Fun f' tp' <$> freshLoc
 
 -- rules
-translateLhs :: (Ord f, Eq v) => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
-translateLhs ar l t =  apply <$> renameHead l <*> return t where
+translateLhs :: (Ord f, Eq v) => TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateLhs l t =  apply <$> renameHead l <*> return t where
   renameHead (sexpr -> (Fun f _ _,rest)) = foldl apply <$> h <*> r where
     h = auxFun f (length rest)
     r = mapExpressionM (\ g _  _ -> constrSym g) (\ v tp -> pure (var v,tp)) `mapM` rest
+  renameHead _ = error "translateLhs: non-proper lhs given" 
 
 translateRhs :: (Ord f, Eq v) => IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
@@ -144,7 +147,8 @@ translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t'
       ve <- freshVar
       vc <- freshVar
       letp (apply (apply e1' e2') t2) (ve,vc) <$> k (Var ve (translatedType tp2)) (Var vc clockType)
-
+  translateK _ _ _ = error "translateRhs: non-proper rhs given"
+  
 translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
 translateEnv t env = Map.insert t clockType $ Map.fromList [ (IdentV w, translatedType tp) | (w, tp) <- Map.toList env ]
 
@@ -152,7 +156,7 @@ translateEquation :: (Ord f, Ord v, IsSymbol f) => ArityDecl f -> TypedEquation 
 translateEquation ar TypedEquation {..} = do
   resetFreshVar
   t <- freshVar
-  l' <- translateLhs ar (lhs eqEqn) (Var t clockType)
+  l' <- translateLhs (lhs eqEqn) (Var t clockType)
   r' <- translateRhs ar (rhs eqEqn) (Var t clockType)
   return TypedEquation { eqEnv = translateEnv t eqEnv
                        , eqEqn = Equation l' r'
@@ -178,6 +182,7 @@ auxiliaryEquations ar (f,tpf) = mapM auxEquation [0 .. if isDefined f then arf -
                            , eqEqn = Equation l r 
                            , eqTpe = typeOf l }
 
+-- TODO: specify mainfns
 tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, TickedProgram f v)
 tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs }
                 , Program { equations = aeqs, signature = Map.fromList afs })

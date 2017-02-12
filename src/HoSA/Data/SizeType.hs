@@ -26,7 +26,7 @@ data SizeType (knd :: Kind) ix where
 
 instance Foldable (SizeType knd) where
   foldr _ z SzVar{}       = z
-  foldr f z (SzCon _ ts ix) = foldr (\ ti z' -> foldr f z' ti) (f ix z) ts
+  foldr f z (SzCon _ ts ix) = foldr (flip (foldr f)) (f ix z) ts
   foldr f z (SzPair t1 t2) = foldr f (foldr f z t2) t1
   foldr f z (SzArr p n) = foldr f (foldr f z n) p
   foldr f z (SzQArr _ p n) = foldr f (foldr f z n) p  
@@ -37,20 +37,18 @@ type Schema = SizeType 'S
 
 type Signature f ix = Map.Map f (Schema ix)
 
-
-
 skeleton :: SizeType knd ix -> SimpleType
-skeleton (SzVar v) = TyVar v
+skeleton (SzVar v)      = TyVar v
 skeleton (SzCon n ts _) = TyCon n (skeleton `map` ts)
 skeleton (SzPair t1 t2) = skeleton t1 :*: skeleton t2
-skeleton (SzArr n p) = skeleton n :-> skeleton p
+skeleton (SzArr n p)    = skeleton n :-> skeleton p
 skeleton (SzQArr _ n p) = skeleton n :-> skeleton p
 
 toSchema :: SizeType knd ix -> Schema ix
-toSchema (SzVar v) = SzVar v
+toSchema (SzVar v)       = SzVar v
 toSchema (SzCon n ts ix) = SzCon n ts ix
-toSchema (SzPair t1 t2) = SzPair (toSchema t1) (toSchema t2)
-toSchema (SzArr n p) = SzQArr [] n p
+toSchema (SzPair t1 t2)  = SzPair (toSchema t1) (toSchema t2)
+toSchema (SzArr n p)     = SzQArr [] n p
 toSchema (SzQArr vs n p) = SzQArr vs n p
 
 rename :: MonadUnique m => SizeType knd ix -> m (SizeType knd ix)
@@ -59,10 +57,10 @@ rename tp = do
   return (ren s tp)
     where
       ren :: [(TypeVariable, Unique)] -> SizeType knd ix -> SizeType knd ix
-      ren s (SzVar v) = (SzVar (fromJust (lookup v s)))
+      ren s (SzVar v)       = SzVar (fromJust (lookup v s))
       ren s (SzCon n ts ix) = SzCon n (ren s `map` ts) ix
-      ren s (SzPair t1 t2) = SzPair (ren s t1) (ren s t2)
-      ren s (SzArr n p) = SzArr (ren s n) (ren s p)
+      ren s (SzPair t1 t2)  = SzPair (ren s t1) (ren s t2)
+      ren s (SzArr n p)     = SzArr (ren s n) (ren s p)
       ren s (SzQArr vs n p) = SzQArr vs (ren s n) (ren s p)
 
 matrix :: MonadUnique m => Schema Ix.Term -> m ([Ix.VarId], Type Ix.Term)
@@ -81,6 +79,7 @@ returnIndex :: MonadUnique m => SizeType knd Ix.Term -> m Ix.Term
 returnIndex (SzCon _ _ ix) = return ix
 returnIndex (SzArr _ p)    = returnIndex p
 returnIndex s@SzQArr{}     = matrix s >>= returnIndex . snd
+returnIndex _              = error "returnIndex not defined on given sized-type"
 
 traverseB :: Applicative f => ([Ix.VarId] -> ix -> f ix') -> SizeType knd ix -> f (SizeType knd ix')
 traverseB = walk [] where

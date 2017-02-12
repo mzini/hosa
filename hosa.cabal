@@ -9,7 +9,7 @@ build-type:            Simple
 cabal-version:         >=1.10
                        
 library
-  ghc-options:         -threaded -Wall -O2 -fno-warn-orphans
+  ghc-options:         -threaded -Wall -O2
         
   exposed-modules:
                        HoSA.Utils
