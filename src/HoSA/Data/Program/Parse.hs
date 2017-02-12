@@ -10,11 +10,17 @@ where
 import Text.Parsec
 import Text.ParserCombinators.Parsec (CharParser)
 
+import qualified Data.Map as M
+import Control.Monad (void)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+
+import Data.Either (partitionEithers)
+import Control.Arrow ((***))
 import HoSA.Utils
 import HoSA.Data.Program.Types
 import HoSA.Data.Program.Expression
-import Control.Monad (void)
-import Control.Monad.IO.Class (MonadIO, liftIO)
+import HoSA.Data.MLTypes
+
 
 
 ----------------------------------------------------------------------
@@ -77,11 +83,13 @@ ppair pa pb = parens $ do
   return (a,b)
 
 reservedWords :: [String]
-reservedWords = words "let be in ; = [ ] ::"
+reservedWords = words "data if then else let be in ; = [ ] :: -> |"
 
 ----------------------------------------------------------------------
 -- parsers
 ----------------------------------------------------------------------
+
+-- expressions
 
 enil :: Location -> UntypedExpression Symbol v
 enil = Fun NIL ()
@@ -152,13 +160,55 @@ eqP :: Parser (UntypedEquation Symbol Variable)
 eqP = do {l <- lhsP; reserved "="; r <- rhsP (fvars l); return (Equation l r); } <?> "equation"
 
 eqsP :: Parser [UntypedEquation Symbol Variable]
-eqsP = eqP `endBy` reserved ";"
+eqsP = eqP `endBy1` reserved ";"
+
+-- types
+
+  
+datatypeDeclP :: Parser (Environment Symbol)
+datatypeDeclP = do
+  reserved "data"
+  n <- typeName
+  vs <- many typeVarName
+  let venv = runUnique $ sequence [(v,) . TyVar <$> unique | v <- vs]
+      lhs = TyCon n [ v | (_,v) <- venv]
+  reserved "="
+  d <- M.fromList <$> constrDeclP lhs venv `sepBy` reserved "|"
+  reserved ";"
+  return d
+  where
+    typeVarName = identifier ((:) <$> lower <*> ident) <?> "variable"
+    typeName = identifier ((:) <$> upper <*> ident) <?> "type name"
+
+    constrDeclP lhs vs = do
+      n <- constructor
+      tpe <- foldr (:->) lhs <$> many typeP
+      return (n, tpe)
+        where
+          typeP = tyFun <?> "type"
+          tyFun = foldr1 (:->) <$> tyNFun `sepBy1` reserved "->"
+          tyNFun = try dataTypeP
+                   <|> tyPair
+                   <|> tyVar
+          dataTypeP = TyCon <$> typeName <*> many typeP
+          tyPair = foldr1 (:*:) <$> parens (typeP `sepBy1` comma)
+          tyVar = do
+            v <- typeVarName 
+            case lookup v vs of
+              Just vid -> return vid
+              Nothing -> unexpected ("undeclared variable in data type declaration: " ++ show v)
 
 
-fromFile :: MonadIO m => FilePath -> m (Either ParseError [UntypedEquation Symbol Variable])
+-- 
+
+fromFile :: MonadIO m => FilePath -> m (Either ParseError (Environment Symbol, [UntypedEquation Symbol Variable]))
 fromFile file = runParser parser (uniqueFromInt 0) sn <$> liftIO (readFile file) where
   sn = "<file " ++ file ++ ">"
-  parser = many (try comment <|> whiteSpace1) *> eqsP <* eof
+  parser = cmts *> (flatten <$> decls) <* eof where
+    cmts = many (try comment <|> whiteSpace1)
+    decls =  many (try (Left <$> datatypeDeclP) <|> (Right <$> eqsP)) <* eof
+    flatten = (M.unions *** concat) . partitionEithers
+    
 
 
 

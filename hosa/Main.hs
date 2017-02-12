@@ -282,33 +282,25 @@ constr n = Symbol n False
 
 -- todo
 initialEnv :: Environment Symbol
-initialEnv = Map.fromList $
+initialEnv = Map.fromList
              [ (constr "[]", list alpha)
              , (constr "(:)", alpha :-> list alpha :-> list alpha)
              , (constr "True", boolean)
              , (constr "False", boolean)
-             , (constr "Pair", alpha :-> beta :-> pair alpha beta)             
-             , (constr "0", nat)
-             , (constr "S", nat :-> nat) ]
+             , (constr "Pair", alpha :-> beta :-> pr alpha beta)]
   where
     alpha = TyVar (uniqueFromInt 1)
     beta = TyVar (uniqueFromInt 2)    
     list e = TyCon "L" [e]
     boolean = TyCon "Bool" []
-    pair a b = TyCon "Pair" [a,b]    
-    nat = TyCon "Nat" []
-
--- 
+    pr a b = TyCon "Pair" [a,b]    
 
 
 readProgram :: RunM (Program Symbol Variable)
 readProgram = do
-  eqs <- parseFile
+  (env,eqs) <- reader input >>= fromFile >>= assertRight ParseError
   fs <- fromMaybe [last [ fst (definedSymbol eq) | eq <- eqs]] <$> reader startSymbols
-  inferMLTypes fs eqs
-    where
-      inferMLTypes fs =  assertRight SimpleTypeError . inferTypes fs initialEnv
-      parseFile = reader input >>= fromFile >>= assertRight ParseError
+  assertRight SimpleTypeError (inferTypes fs (env `Map.union` initialEnv) eqs)
   
 
 infer :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SzT.Signature f Ix.Term -> Program f v -> RunM (SOCS.ConcreteSignature f)
@@ -321,7 +313,7 @@ infer sig p = generateConstraints >>= solveConstraints where
     pr <- reader constraintProcessor
     focs <- SOCS.toFOCS cs
     (esig,l) <- lift (lift (SOCS.solveConstraints pr sig focs))
-    putExecLog [ Node ("Solving Constraints") l ]
+    putExecLog [ Node "Solving Constraints" l ]
                  
                  
                  
