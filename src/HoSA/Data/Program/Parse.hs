@@ -124,11 +124,10 @@ lhsP = application (s <?> "function") arg where
 
 rhsP :: [Variable] -> Parser (UntypedExpression Symbol Variable)
 rhsP = expression where
-  
-  expression vs = foldl (Apply ()) <$> arg vs <*> many (arg vs)
-  
-  arg vs = (p `sepBy1` reserved ":") >>= lstP where
-    p = l vs <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
+
+  expression vs = (e `sepBy1` reserved ":") >>= lstP where
+    e = foldl (Apply ()) <$> arg <*> many arg
+    arg = l vs <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
 
   par vs = foldr1 (Pair ((),())) <$> parens (expression vs `sepBy1` comma)
     

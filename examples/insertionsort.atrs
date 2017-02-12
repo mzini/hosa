@@ -3,8 +3,8 @@ fold_right f (x:xs) acc = f x (fold_right f xs acc);
 
 insert cmp x [] = x : [];
 insert cmp x (y:ys) = insert' cmp (cmp x y) x (y:ys);
-insert' cmp True x (y:ys) = x : (y : ys);
-insert' cmp False x (y:ys) = y : (insert cmp x ys);
+insert' cmp True x (y:ys) = x : y : ys;
+insert' cmp False x (y:ys) = y : insert cmp x ys;
 
 gt 0 y = False;
 gt (S x) 0 = True;
