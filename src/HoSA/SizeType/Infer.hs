@@ -170,10 +170,10 @@ logObligation :: MonadTrace PP.Doc m => (PP.Pretty f, PP.Pretty v) => Obligation
 logObligation = logMsg
 
 footprint :: (Ord f, Ord v, PP.Pretty f, PP.Pretty v) => SizeTypedExpression f v -> InferM f v (Footprint v)
-footprint l = do
-  fp <- fpInfer l
-  logMsg (PP.text "Footprint of" PP.<+> PP.squotes (PP.pretty l) PP.<> PP.text ":" PP.<+> PP.pretty fp)
-  return fp
+footprint l = fpInfer l
+  -- fp <- fpInfer l
+  -- logMsg (PP.text "Footprint of" PP.<+> PP.squotes (PP.pretty l) PP.<> PP.text ":" PP.<+> PP.pretty fp)
+  -- return fp
   where
     fpInfer (Fun (_,s) _ _) = do
       (_, tp) <- rename s >>= matrix

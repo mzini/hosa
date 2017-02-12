@@ -71,10 +71,10 @@ constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
     Simple -> simple
-    SCC -> withLog $ try simplify ==> try (exhaustive (logAs "SCC" (sccDecompose simple)))
+    SCC -> withLog (try simplify) ==> try (exhaustive (logAs "SCC" (sccDecompose simple)))
   where
     withLog p cs = 
-      logOpenConstraints cs *> p cs <* logInterpretation cs
+      logOpenConstraints cs *> p cs <* logInterpretation cs <* logConstraints cs
       
     logAs str p cs = logBlk (str++"...") (p cs)
     simple =
@@ -320,9 +320,11 @@ infer sig p = generateConstraints >>= solveConstraints where
   solveConstraints cs = do
     pr <- reader constraintProcessor
     focs <- SOCS.toFOCS cs
-    putExecLog [Node (PP.text "Generated FOCS") [Node (PP.pretty c) [] | c <- focs]]
     (esig,l) <- lift (lift (SOCS.solveConstraints pr sig focs))
-    putExecLog l
+    putExecLog [ Node ("Solving Constraints") l ]
+                 
+                 
+                 
     assertRight (ConstraintUnsolvable p) esig
 
 putSolution :: (Eq f, PP.Pretty f, PP.Pretty v, PP.Pretty ix, IsSymbol f) =>
