@@ -7,6 +7,9 @@ module HoSA.Data.MLTypes
   , TypeSubstitution
   , Environment
   , Signature
+    -- * Build in Types
+  , tyBool
+  , tyList
     -- * Alpha conversion etc.
   , equalModulo
   , compareModulo
@@ -68,12 +71,21 @@ type TypeSubstitution = TypeVariable -> SimpleType
 
 
 ----------------------------------------------------------------------
+-- build in types 
+----------------------------------------------------------------------
+
+tyBool :: SimpleType
+tyBool = TyCon "Bool" []
+
+tyList :: SimpleType -> SimpleType
+tyList e = TyCon "L" [e]
+----------------------------------------------------------------------
 -- alpha conversion etc.
 ----------------------------------------------------------------------
 
 equalModulo :: SimpleType -> SimpleType -> Bool
-tp1 `equalModulo` tp2 = tp1 == tp2
-
+tp1 `equalModulo` tp2 = ren tp1 == ren tp2
+  where ren tp = rename (fvs tp) tp
 compareModulo :: SimpleType -> SimpleType -> Ordering
 tp1 `compareModulo` tp2 = ren tp1 `compare` ren tp2
   where ren tp = rename (fvs tp) tp

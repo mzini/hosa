@@ -135,7 +135,7 @@ rhsP = expression where
 
   expression vs = (e `sepBy1` reserved ":") >>= lstP where
     e = foldl (Apply ()) <$> arg <*> many arg
-    arg = l vs <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
+    arg = i vs <|> l vs <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
 
   par vs = foldr1 (Pair ((),())) <$> parens (expression vs `sepBy1` comma)
     
@@ -147,6 +147,11 @@ rhsP = expression where
     
   s = (symbol >>= fun) <?> "function symbol"
 
+  i vs =
+    If () <$> (try (reserved "if") >> expression vs)
+          <*> (reserved "then" >> expression vs)
+          <*> (reserved "else" >> expression vs)
+    
   l vs = do
     try (reserved "let")
     t1 <- expression vs

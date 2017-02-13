@@ -61,6 +61,7 @@ data Expression f v tp =
   | Pair (tp,tp) (Expression f v tp) (Expression f v tp)
   | Fun f tp Location
   | Apply tp (Expression f v tp) (Expression f v tp)
+  | If tp (Expression f v tp) (Expression f v tp) (Expression f v tp)
   | LetP tp (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)
 
 data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Expression f v tp }

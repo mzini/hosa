@@ -127,16 +127,14 @@ translateLhs l t =  apply <$> renameHead l <*> return t where
     r = mapExpressionM (\ g _  _ -> constrSym g) (\ v tp -> pure (var v,tp)) `mapM` rest
   renameHead _ = error "translateLhs: non-proper lhs given" 
 
-translateRhs :: (Ord f, Eq v) => IsSymbol f => ArityDecl f -> TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
-translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
+translateRhs :: (Ord f, Eq v) => IsSymbol f => TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateRhs e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
   translateK (Var v tp) t k = k (Var (var v) (translatedType tp)) t
   translateK (Fun f tp _) t k = do
     f0 <- auxFun f 0
     ve <- freshVar
     vc <- freshVar
     letp (apply f0 t) (ve,vc) <$> k (Var ve (translatedType tp)) (Var vc clockType)
-  -- translateK (Fun f _ _) t k | isConstructor f && ar f == 0 = constrFun f >>= flip k t
-  -- translateK (Fun f _ _) t k = auxFun f 1 >>= flip k t
   translateK (Pair _ e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
     k2 e1' e2' t2 = k (pair e1' e2') t2 --TODO
@@ -147,17 +145,19 @@ translateRhs ar e time = translateK e time (\ e' t' -> return (e' `pair` tick t'
       ve <- freshVar
       vc <- freshVar
       letp (apply (apply e1' e2') t2) (ve,vc) <$> k (Var ve (translatedType tp2)) (Var vc clockType)
+  translateK (If _ eg et ee) t k = translateK eg t k1 where
+    k1 eg' t1 = ite eg' <$> translateK et t1 k <*> translateK ee t1 k
   translateK _ _ _ = error "translateRhs: non-proper rhs given"
   
 translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
 translateEnv t env = Map.insert t clockType $ Map.fromList [ (IdentV w, translatedType tp) | (w, tp) <- Map.toList env ]
 
-translateEquation :: (Ord f, Ord v, IsSymbol f) => ArityDecl f -> TypedEquation f v -> TickM f (TickedEquation f v)
-translateEquation ar TypedEquation {..} = do
+translateEquation :: (Ord f, Ord v, IsSymbol f) => TypedEquation f v -> TickM f (TickedEquation f v)
+translateEquation TypedEquation {..} = do
   resetFreshVar
   t <- freshVar
   l' <- translateLhs (lhs eqEqn) (Var t clockType)
-  r' <- translateRhs ar (rhs eqEqn) (Var t clockType)
+  r' <- translateRhs (rhs eqEqn) (Var t clockType)
   return TypedEquation { eqEnv = translateEnv t eqEnv
                        , eqEqn = Equation l' r'
                        , eqTpe = translatedType eqTpe :*: clockType }
@@ -182,13 +182,12 @@ auxiliaryEquations ar (f,tpf) = mapM auxEquation [0 .. if isDefined f then arf -
                            , eqEqn = Equation l r 
                            , eqTpe = typeOf l }
 
--- TODO: specify mainfns
 tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, TickedProgram f v)
-tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs }
-                , Program { equations = aeqs, signature = Map.fromList afs })
+tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs, mainFns = [] } --TODO
+                , Program { equations = aeqs, signature = Map.fromList afs, mainFns = [] })
   where
     sig = signature p
-    (eqs,fs) = runTick sig $ translateEquation (arity p) `mapM` equations p
+    (eqs,fs) = runTick sig $ translateEquation `mapM` equations p
     (aeqs,afs) = runTick sig $ auxiliaryEquations (arity p) `concatMapM` (Map.toList sig)
          -- ++ auxEquations ar `concatMap` signatureToDecls (statrsSignature statrs)
 

@@ -141,7 +141,7 @@ prettyType = ppTpe id
 instance PP.Pretty ix => PP.Pretty (SizeType knd ix) where
   pretty = prettyType PP.pretty
 
-instance {-# OVERLAPABLE #-} (PP.Pretty f, PP.Pretty ix) => PP.Pretty (Signature f ix) where
+instance {-# OVERLAPPABLE #-} (PP.Pretty f, PP.Pretty ix) => PP.Pretty (Signature f ix) where
   pretty sig = PP.vcat [ PP.hang 2 $ pp f n | (f, n) <- Map.toList sig ] where
     pp f n = PP.pretty "∑" PP.<> PP.parens (PP.pretty f) PP.<+> PP.text "↦" PP.<+> PP.pretty (runUnique (rename n))
   

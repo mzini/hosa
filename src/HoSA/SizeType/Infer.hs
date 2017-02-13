@@ -314,6 +314,14 @@ inferSizeType_ ctx (Apply _ t1 t2) = do
       tBdy' <- substituteTyVars subst tBdy
       return (ctx2',tBdy')
     _ -> throwError (IlltypedTerm t1 "function type" tp1)
+inferSizeType_ ctx (If _ tg tt te) = do
+  (ctx1, _) <- inferSizeType ctx tg
+  (ctx2, tpt) <- inferSizeType ctx1 tt
+  tp <- soSuperType tpt
+  (ctx3, tpe) <- inferSizeType ctx2 te
+  subst <- tpe `subtypeOf` tp
+  ctx' <- substituteTyVars subst ctx3
+  return (ctx', tp)
 inferSizeType_ ctx (LetP _ t1 ((x,_),(y,_)) t2) = do
   (ctx1,tp1) <- inferSizeType ctx t1
   case tp1 of

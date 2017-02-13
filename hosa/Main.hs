@@ -87,7 +87,7 @@ constraintProcessor cfg =
         ==> try (smt' "SMT-MMI(2)" smtOpts { degree = 2})
         ==> try (smt' "SMT-MI(2)" smtOpts { degree = 2, shape = Mixed})
         ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
-        ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
+        ==> try (smt' "SMT-MI(3)" smtOpts { degree = 4, shape = Mixed})
     smt' n o = logAs n $ timed $ smt (solver cfg) o
     simplify = 
       logAs "Simplification" $
@@ -283,17 +283,11 @@ constr n = Symbol n False
 -- todo
 initialEnv :: Environment Symbol
 initialEnv = Map.fromList
-             [ (constr "[]", list alpha)
-             , (constr "(:)", alpha :-> list alpha :-> list alpha)
-             , (constr "True", boolean)
-             , (constr "False", boolean)
-             , (constr "Pair", alpha :-> beta :-> pr alpha beta)]
+             [ (constr "[]", tyList alpha)
+             , (constr "(:)", alpha :-> tyList alpha :-> tyList alpha)
+             , (constr "True", tyBool) , (constr "False", tyBool)]
   where
     alpha = TyVar (uniqueFromInt 1)
-    beta = TyVar (uniqueFromInt 2)    
-    list e = TyCon "L" [e]
-    boolean = TyCon "Bool" []
-    pr a b = TyCon "Pair" [a,b]    
 
 
 readProgram :: RunM (Program Symbol Variable)

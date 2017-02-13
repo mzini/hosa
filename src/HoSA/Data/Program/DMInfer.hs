@@ -58,7 +58,6 @@ unifyM rl a tp1 tp2 =
     Left (tp1',tp2') -> throwError (IncompatibleType rl a tp1' tp2')
     Right s -> modify (second (substitute s)) >> return s
 
--- TODO 
 inferEquation :: (Ord v, Ord f, IsSymbol f) => UntypedEquation f v -> InferM f v (TypedEquation f v, TypeSubstitution)
 inferEquation rl = do
   (lhs', env1, subst1) <- infer Map.empty (lhs rl)
@@ -95,6 +94,11 @@ inferEquation rl = do
       (t1, env1, subst1) <- check env s1 (v1 :-> v2)
       (t2, env2, subst2) <- check env1 s2 (substitute subst1 v1)
       return (apply (substitute subst2 t1) t2, env2, subst2 `o` subst1)
+    infer env (If _ g t e) = do
+      (tg, env1, subst1) <- check env g tyBool
+      (tt, env2, subst2) <- infer env1 t
+      (te, env3, subst3) <- infer env2 e
+      return (ite (substitute (subst3 `o` subst2) tg) (substitute subst3 tt) te, env3, subst3 `o` subst2 `o` subst1)
     infer env (LetP _ s1 ((x,_),(y,_)) s2) = do
       v1 <- freshTyExp
       v2 <- freshTyExp

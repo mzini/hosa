@@ -50,6 +50,10 @@ prettyExpression showLabel ppFun ppVar = pp id where
   pp _ (Pair _ t1 t2) = ppTuple (pp id t1, pp id t2)
   pp par (Apply _ t1 t2) =
     par (pp id t1 PP.</> pp PP.parens t2)
+  pp par (If _ tg tt te) =
+    par (PP.text "if" PP.<+> pp id tg
+         PP.<$> PP.hang 2 (PP.text "then" PP.<+> pp id tt)
+         PP.<$> PP.hang 2 (PP.text "else" PP.<+> pp id te))
   pp par (LetP _ t1 ((x,_),(y,_)) t2) =
     par (PP.align (PP.text "let" PP.<+> ppTuple (ppVar x, ppVar y)
                    PP.<+> PP.text "=" PP.<+> pp id t1
