@@ -7,6 +7,7 @@ packages:
 extra-deps:
 - smtlib2-1.0
 - smtlib2-pipe-1.0
+- smtlib2-debug-1.0
 - union-find-array-0.1.0.2
 - atto-lisp-0.2.2.2
 - data-fix-0.0.3
