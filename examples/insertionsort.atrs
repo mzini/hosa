@@ -1,15 +1,17 @@
+data N = 0 | S N;
+
 fold_right f [] acc = acc;
 fold_right f (x:xs) acc = f x (fold_right f xs acc);
 
 insert cmp x [] = x : [];
-insert cmp x (y:ys) = insert' cmp (cmp x y) x (y:ys);
-insert' cmp True x (y:ys) = x : y : ys;
-insert' cmp False x (y:ys) = y : insert cmp x ys;
-
+insert cmp x (y:ys) = if cmp x y
+                       then x : y : ys
+		       else insert cmp x ys;
+		       
 gt 0 y = False;
 gt (S x) 0 = True;
 gt (S x) (S y) = gt x y;
 
-sort cmp = fold_right (insert cmp);
+sort cmp l = fold_right (insert cmp) l [];
 
 main = sort gt;

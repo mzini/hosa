@@ -1,7 +1,0 @@
-map f [] = [];
-map f (x:xs) = f x : map f xs;
-
-add x 0 = x;
-add x (S y) = S (add x y);
-
-main x ls = map (add x) ls;

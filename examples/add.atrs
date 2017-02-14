@@ -1,2 +1,0 @@
-add x 0 = x;
-add x (S y) = S (add x y);

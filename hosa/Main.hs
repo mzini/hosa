@@ -71,23 +71,23 @@ constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
 constraintProcessor cfg =
   case smtStrategy cfg of
     Simple -> simple
-    SCC -> withLog (try simplify) ==> try (exhaustive (logAs "SCC" (sccDecompose simple)))
+    SCC -> timed $ withLog (try simplify) ==> try (exhaustive (logAs "SCC-DECOMPOSE" (sccDecompose simple)))
   where
     withLog p cs = 
       logOpenConstraints cs *> p cs <* logInterpretation cs <* logConstraints cs
       
-    logAs str p cs = logBlk (str++"...") (p cs)
+    logAs str p cs = logBlk (str++" ...") (p cs)
     simple =
       logAs "SOLVE" $ timed $ withLog $
         try simplify
         ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True,
-                                           minimize = tryM (iterM 3 zeroOut) `andThenM` tryM (iterM 3 shiftMax) `andThenM` iterM 3 decreaseCoeffs })
+                                           minimize = tryM (exhaustiveM zeroOut) `andThenM` tryM (iterM 3 shiftMax) `andThenM` iterM 3 decreaseCoeffs })
         ==> try (smt' "SMT-SLI" smtOpts { degree = 1, maxCoeff = Just 1 })
         ==> try (smt' "SMT-LI" smtOpts { degree = 1 })
         ==> try (smt' "SMT-MMI(2)" smtOpts { degree = 2})
         ==> try (smt' "SMT-MI(2)" smtOpts { degree = 2, shape = Mixed})
         ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
-        ==> try (smt' "SMT-MI(3)" smtOpts { degree = 4, shape = Mixed})
+        ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
     smt' n o = logAs n $ timed $ smt (solver cfg) o
     simplify = 
       logAs "Simplification" $
@@ -262,7 +262,7 @@ type RunM = ExceptT Error (ReaderT HoSA (UniqueT IO))
 putExecLog :: PP.Pretty d => Forest d -> RunM ()
 putExecLog l = do 
    v <- reader verbose
-   when v (liftIO (putDocLn (ppForest l)))
+   when v (liftIO (putDocErrLn (ppForest l)))
 
 status :: PP.Pretty e => String -> e -> RunM ()
 status n e = liftIO (putDocLn (PP.text (n ++ ":") PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
@@ -331,24 +331,24 @@ timeAnalysis p = do
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
     tickSchema = SzQArr [1] (SzCon "#" [] (Ix.bvar 1)) (SzCon "#" [] (Ix.Succ (Ix.bvar 1)))
-    functionDecls w = runUnique (decls w `concatMapM` (Map.toList (signature p)))
+    functionDecls w = runUnique (decls w `concatMapM` Map.toList (signature p))
     decls w (f,tp) = do
       (t,v) <- abstractTimeType w f tp
       let constrDecl = (TConstr f, close (suite t ar))
           auxDecls = (TSymbol f 0, close (SzArr (clock v) (SzPair t (clock v))))
                      : [(TSymbol f (i + 1), close (suite t i)) | i <- [0 .. ar - 1]]
-      return $ if isDefined f then auxDecls else ( constrDecl : auxDecls )
+      return $ if isDefined f then auxDecls else constrDecl : auxDecls
         where
           ar = arity p f
           clock = SzCon "#" [] . Ix.bvar
           suite t 0 = t
-          suite (SzArr n (SzArr _ (SzPair p _))) i = SzArr n (suite p (i-1))
+          suite (SzArr n (SzArr _ (SzPair p' _))) i = SzArr n (suite p' (i-1))
 
 sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  status "AbstractSignature" (abstractSignature w)
+  -- status "AbstractSignature" (abstractSignature w)
   infer (abstractSignature w) p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))

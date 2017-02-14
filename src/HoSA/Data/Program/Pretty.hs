@@ -9,7 +9,7 @@ import Data.List (partition)
 import qualified Data.Map as Map
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-import HoSA.Utils (uniqueToInt)
+import HoSA.Utils (uniqueToInt,(//))
 import HoSA.Data.MLTypes
 import HoSA.Data.Program.CallSite
 import HoSA.Data.Program.Equation
@@ -87,6 +87,11 @@ prettyProgram Program{..} sig =
             , not (null eqs)]
     PP.<$> PP.text "where"
     PP.<$> PP.indent 2 (PP.vcat [ppDecl c tp | (c,tp) <- cs, c `elem` fs])
+    PP.<$> if null mainFns
+            then PP.empty
+            else PP.text ""
+                 PP.<$> (PP.text "main function(s):"
+                         // PP.hang 2 (PP.hcat (PP.punctuate (PP.text ",") [PP.pretty f | f <- mainFns])))
     where
       ppDecl f tp = PP.pretty f PP.<+> PP.text "::" PP.<+> PP.pretty tp
 

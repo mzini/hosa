@@ -342,7 +342,7 @@ obligationToConstraints ob@(ctx :- (t, tp)) =  logBlk ob $ execInferCG $ do
 generateConstraints :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Signature f Ix.Term -> Program f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
 generateConstraints sig p = runInferM (signature p) $
-  logBlk "Orientation constraints"
+  logBlk "Type Inference"
     (obligations sig p >>= concatMapM obligationToConstraints)
 
 -- pretty printers
@@ -357,8 +357,7 @@ instance PP.Pretty v => PP.Pretty (TypingContext v) where
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Obligation f v) where
   pretty (ctx :- (t, s)) = 
     PP.group (PP.nest 2 (PP.pretty ctx PP.<+> PP.text "⊦" 
-                         PP.<$> PP.nest 2 (PP.group (PP.pretty t PP.<+> PP.text ":"
-                                                     PP.<$> PP.pretty s))))
+                         PP.<$> PP.nest 2 (PP.group (PP.pretty t PP.<$> PP.text ":" PP.<+> PP.pretty s))))
 
 instance {-# OVERLAPPING #-} PP.Pretty TSubst where
   pretty [] = PP.text "Ø"

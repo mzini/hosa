@@ -1,4 +1,0 @@
-map f [] = [];
-map f (x : xs) = (f x) : (map f xs);
-
-main x ls = map S ls;

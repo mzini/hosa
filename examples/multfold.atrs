@@ -1,4 +1,0 @@
-iter f b 0 = b;
-iter f b (S n) = f (iter f b n);
-add n m = iter S n m;
-mult n m = iter (add n) 0 m;

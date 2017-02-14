@@ -23,13 +23,14 @@ module HoSA.Utils (
   , ($$)
   , ppSeq
   , putDocLn
+  , putDocErrLn
   , hPutDocLn
   , renderPretty
   -- * Lists
   , groupWith
 ) where
 
-import System.IO (hPutStrLn, Handle)
+import System.IO (hPutStrLn, stderr, Handle)
 import           Control.Monad.State
 import           Control.Monad.Writer
 import           Control.Monad.Except
@@ -83,6 +84,9 @@ putDocLn = putStrLn . renderPretty
 
 hPutDocLn :: PP.Pretty e => Handle -> e -> IO ()
 hPutDocLn h = hPutStrLn h . renderPretty
+
+putDocErrLn :: PP.Pretty e => e -> IO ()
+putDocErrLn = hPutDocLn stderr
 
 renderPretty :: PP.Pretty e => e -> String
 renderPretty d = PP.displayS (PP.renderSmart 1.0 120 (PP.pretty d)) ""

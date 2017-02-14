@@ -183,12 +183,13 @@ auxiliaryEquations ar (f,tpf) = mapM auxEquation [0 .. if isDefined f then arf -
                            , eqTpe = typeOf l }
 
 tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, TickedProgram f v)
-tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs, mainFns = [] } --TODO
+tickProgram p = ( Program { equations = eqs, signature = Map.fromList fs, mainFns = [ TSymbol f (ar f) | f <- mainFns p] }
                 , Program { equations = aeqs, signature = Map.fromList afs, mainFns = [] })
   where
     sig = signature p
+    ar = arity p
     (eqs,fs) = runTick sig $ translateEquation `mapM` equations p
-    (aeqs,afs) = runTick sig $ auxiliaryEquations (arity p) `concatMapM` (Map.toList sig)
+    (aeqs,afs) = runTick sig $ auxiliaryEquations ar `concatMapM` (Map.toList sig)
          -- ++ auxEquations ar `concatMap` signatureToDecls (statrsSignature statrs)
 
 -- ntickATRS :: STAtrs Symbol Variable -> TickedAtrs
