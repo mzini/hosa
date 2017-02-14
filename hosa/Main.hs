@@ -65,14 +65,15 @@ startSymbols cfg = map sym <$> mains cfg where
 
 
 smtOpts :: SMTOpts
-smtOpts = SMT.defaultSMTOpts
+smtOpts = SMT.defaultSMTOpts { minimize = tryM (exhaustiveM zeroOut) `andThenM` iterM 3 decreaseCoeffs }
           
-constraintProcessor :: MonadIO m => HoSA -> SOCS.Processor m
+constraintProcessor :: HoSA -> SOCS.Processor IO
 constraintProcessor cfg =
   case smtStrategy cfg of
     Simple -> simple
     SCC -> timed $ withLog (try simplify) ==> try (exhaustive (logAs "SCC-DECOMPOSE" (sccDecompose simple)))
   where
+    millisecs = (*) (10^(3::Int))
     withLog p cs = 
       logOpenConstraints cs *> p cs <* logInterpretation cs <* logConstraints cs
       
@@ -80,15 +81,15 @@ constraintProcessor cfg =
     simple =
       logAs "SOLVE" $ timed $ withLog $
         try simplify
-        ==> try (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True,
-                                           minimize = tryM (exhaustiveM zeroOut) `andThenM` tryM (iterM 3 shiftMax) `andThenM` iterM 3 decreaseCoeffs })
+        ==> try (timeout (millisecs 500) (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True,
+                                           minimize = tryM (exhaustiveM zeroOut) `andThenM` tryM (iterM 3 shiftMax) `andThenM` iterM 3 decreaseCoeffs }))
         ==> try (smt' "SMT-SLI" smtOpts { degree = 1, maxCoeff = Just 1 })
         ==> try (smt' "SMT-LI" smtOpts { degree = 1 })
         ==> try (smt' "SMT-MMI(2)" smtOpts { degree = 2})
         ==> try (smt' "SMT-MI(2)" smtOpts { degree = 2, shape = Mixed})
         ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
         ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
-    smt' n o = logAs n $ timed $ smt (solver cfg) o
+    smt' n opts = logAs n $ timed $ smt (solver cfg) opts
     simplify = 
       logAs "Simplification" $
         try instantiate
@@ -116,10 +117,10 @@ close (SzPair t1 t2)  = SzPair (close t1) (close t2)
 close t@(SzArr n p)   = SzQArr (Set.toList (bvs t)) n p where
   bvs :: SizeType knd Ix.Term -> Set.Set Ix.VarId
   bvs (SzVar _) = Set.empty
-  bvs (SzCon _ ts ix) = Set.fromList (Ix.bvars ix) `Set.union` Set.unions [bvs t | t <- ts]
+  bvs (SzCon _ ts ix) = Set.fromList (Ix.bvars ix) `Set.union` Set.unions (bvs `map` ts)
   bvs (SzPair t1 t2) = bvs t1 `Set.union` bvs t2
-  bvs (SzArr n p) = bvs n `Set.union` bvs p
-  bvs (SzQArr ixs n p) = (bvs n `Set.union` bvs p) Set.\\ Set.fromList ixs
+  bvs (SzArr t1 t2) = bvs t1 `Set.union` bvs t2
+  bvs (SzQArr ixs t1 t2) = (bvs t1 `Set.union` bvs t2) Set.\\ Set.fromList ixs
 
 
 freshVarIds :: MonadUnique m => Int -> m [Ix.VarId]
@@ -140,8 +141,8 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
     annotatePositive w vs (TyCon n ts) = do
       (fvsn,fvsp,as) <- foldM (\ (fvsn,fvsp,as) t -> do
                                   (fvsn', fvsp', a) <- annotatePositive w vs t
-                                  return (fvsn' `Set.union` fvsn'
-                                         , fvsp' `Set.union` fvsp'
+                                  return (fvsn' `Set.union` fvsn
+                                         , fvsp' `Set.union` fvsp
                                          , as ++ [SzT.toSchema a]))
                               (Set.empty,Set.empty,[])
                               ts
@@ -189,8 +190,8 @@ abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositi
     annotatePositive w vs (TyCon n ts) = do
       (fvsn,fvsp,as) <- foldM (\ (fvsn,fvsp,as) t -> do
                                   (fvsn', fvsp', a) <- annotatePositive w vs t
-                                  return (fvsn' `Set.union` fvsn'
-                                         , fvsp' `Set.union` fvsp'
+                                  return (fvsn' `Set.union` fvsn
+                                         , fvsp' `Set.union` fvsp
                                          , as ++ [SzT.toSchema a]))
                               (Set.empty,Set.empty,[])
                               ts
@@ -306,7 +307,7 @@ infer sig p = generateConstraints >>= solveConstraints where
   solveConstraints cs = do
     pr <- reader constraintProcessor
     focs <- SOCS.toFOCS cs
-    (esig,l) <- lift (lift (SOCS.solveConstraints pr sig focs))
+    (esig,l) <- lift (lift (liftIO (SOCS.solveConstraints pr sig focs)))
     putExecLog [ Node "Solving Constraints" l ]
                  
                  
@@ -348,7 +349,7 @@ sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  -- status "AbstractSignature" (abstractSignature w)
+  status "AbstractSignature" (abstractSignature w)
   infer (abstractSignature w) p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))

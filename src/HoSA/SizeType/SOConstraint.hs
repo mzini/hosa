@@ -158,7 +158,7 @@ instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, Max c, PP.Pretty c) => 
 -- putting things together
 type ConcreteSignature f = Signature f (PartialPolynomial Integer)
                                        
-solveConstraints :: (MonadUnique m) => Processor m -> Signature f Term -> FOCS -> m (Either (ConcreteSignature f) (ConcreteSignature f), Forest String)
+solveConstraints :: MonadIO m => Processor m -> Signature f Term -> FOCS -> m (Either (ConcreteSignature f) (ConcreteSignature f), Forest String)
 solveConstraints p sig focs = first fromAnswer <$> (toGubsCS focs `GUBS.solveWith` p)
     where
       fromAnswer (GUBS.Sat i) = Right (interpretSig i sig)
