@@ -1,18 +1,19 @@
+data N = 0 | S N;
+data Pair a b = Pair a b;
+
 foldr f b [] = b;
 foldr f b (l : ls) = f l (foldr f b ls);
 
 filter p [] = [];
-filter p (l : ls) = filterIf (p l) p (l:ls);
-filterIf True p (l:ls) = l : (filter p ls);
-filterIf False p (l:ls) = filter p ls;
+filter p (l : ls) = if p l then l : filter p ls else filter p ls;
 
-lam1 n m l = (n,m) : l;
+lam1 n m l = Pair n m : l;
 lam2 ms n l = foldr (lam1 n) l ms;
 product ns ms = foldr (lam2 ms) [] ns;
 
-notEqual (0  , 0  ) = False;
-notEqual (S x, 0  ) = True;
-notEqual (0  , S y) = True;
-notEqual (S x, S y) = notEqual (x,y);
+notEqual (Pair 0     0    ) = False;
+notEqual (Pair (S x) 0    ) = True;
+notEqual (Pair 0     (S y)) = True;
+notEqual (Pair (S x) (S y)) = notEqual (Pair x y);
 
-main ns = filter notEqual (product ns ms);
+main ns ms = filter notEqual (product ns ms);
