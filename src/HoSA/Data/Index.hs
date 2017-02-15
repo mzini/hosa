@@ -48,7 +48,7 @@ data Var = BVar VarId | FVar VarId deriving (Eq, Ord)
 data MetaVar = MetaVar { metaVarId :: Unique
                        , metaVarRef :: IORef (Maybe Term)}
 
-data Sym = Sym { ixsName :: Maybe String, ixsId :: Unique } deriving (Eq, Ord)
+data Sym = Sym { ixsName :: Maybe String, ixsId :: Unique } deriving (Eq, Ord, Show)
 
 data Term =
   Zero

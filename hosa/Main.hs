@@ -1,20 +1,18 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module Main where
 
-import           Control.Arrow (first,second)
-import           Control.Monad (when, unless)
+import           Control.Arrow (first)
+import           Control.Monad (when)
 import           Control.Monad.Except
 import           Control.Monad.Reader
-import           Data.Maybe (fromMaybe, mapMaybe, listToMaybe)
-import           Data.Traversable (traverse)
-import           Data.Tree (drawForest, Forest, Tree (..))
+import           Data.Maybe (fromMaybe)
+import           Data.Tree (Forest, Tree (..))
 import           Data.Typeable (Typeable)
 import           System.Console.CmdArgs
 import           System.Exit
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import           Data.List (nub)
 
 import           HoSA.Utils
 import           HoSA.Ticking
@@ -28,8 +26,8 @@ import           HoSA.Data.SizeType (SizeType (..), Schema, Type)
 import           GUBS hiding (Symbol, Variable, Var, definedSymbol)
 import qualified GUBS.Solve.SMT as SMT
 
-deriving instance Typeable (SMT.Solver)
-deriving instance Data (SMT.Solver)
+deriving instance Typeable SMT.Solver
+deriving instance Data SMT.Solver
 
 data SMTStrategy = Simple | SCC deriving (Show, Data, Typeable)
 data AnalysisType = Time | Size deriving (Show, Data, Typeable)
@@ -81,7 +79,7 @@ constraintProcessor cfg =
     simple =
       logAs "SOLVE" $ timed $ withLog $
         try simplify
-        ==> try (timeout (millisecs 500) (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True,
+        ==> try (timeout (millisecs 200) (smt' "SMT-MSLI" smtOpts { degree = 1, maxCoeff = Just 1, maxPoly = True,
                                            minimize = tryM (exhaustiveM zeroOut) `andThenM` tryM (iterM 3 shiftMax) `andThenM` iterM 3 decreaseCoeffs }))
         ==> try (smt' "SMT-SLI" smtOpts { degree = 1, maxCoeff = Just 1 })
         ==> try (smt' "SMT-LI" smtOpts { degree = 1 })
@@ -149,7 +147,7 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
       is <- freshVarIds w
       let vs' = Set.fromList is `Set.union` vs
       ix <- lift (freshIxTermFor f vs')
-      return (fvsp, vs' `Set.union` fvsp,SzCon n as ix)
+      return (fvsn, vs' `Set.union` fvsp,SzCon n as ix)
     annotatePositive w vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotatePositive w vs tp1
       (fvsn2, fvsp2, t2) <- annotatePositive w vs tp2
@@ -198,7 +196,7 @@ abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositi
       is <- freshVarIds w
       let vs' = Set.fromList is `Set.union` vs
       ix <- lift (freshIxTermFor f vs')
-      return (fvsp, vs' `Set.union` fvsp,SzCon n as ix)
+      return (fvsn, vs' `Set.union` fvsp,SzCon n as ix)
     annotatePositive w vs (tp1 :*: tp2) = do
       (fvsn1, fvsp1, t1) <- annotatePositive w vs tp1
       (fvsn2, fvsp2, t2) <- annotatePositive w vs tp2
