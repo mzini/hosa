@@ -5,7 +5,7 @@ module HoSA.Data.Program.Pretty
   , prettyProgram
   ) where
 
-import Data.List (partition)
+import Data.List (partition, sortBy)
 import qualified Data.Map as Map
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
@@ -82,19 +82,24 @@ prettyProgram Program{..} sig =
     PP.vcat [ ppDecl d tp
               PP.<$> PP.vcat (PP.pretty `map` eqs)
               PP.<$> PP.empty
-            | (d,tp) <- ds
+            | (d,tp) <- sortBy occurrence ds
             , let eqs = [eq | eq <- untypedEquations, fst (definedSymbol eq) == d]
             , not (null eqs)]
     PP.<$> PP.text "where"
     PP.<$> PP.indent 2 (PP.vcat [ppDecl c tp | (c,tp) <- cs, c `elem` fs])
-    PP.<$> if null mainFns
-            then PP.empty
-            else PP.text ""
-                 PP.<$> (PP.text "main function(s):"
-                         // PP.hang 2 (PP.hcat (PP.punctuate (PP.text ",") [PP.pretty f | f <- mainFns])))
+    -- PP.<$> if null mainFns
+    --         then PP.empty
+    --         else PP.text ""
+    --              PP.<$> (PP.text "main function(s):"
+    --                      // PP.hang 2 (PP.hcat (PP.punctuate (PP.text ",") [PP.pretty f | f <- mainFns])))
     where
       ppDecl f tp = PP.pretty f PP.<+> PP.text "::" PP.<+> PP.pretty tp
-
+      occurrence (d1,_) (d2,_) = walk untypedEquations where
+        walk [] = EQ
+        walk (eq:eqs)
+          | fst (definedSymbol eq) == d1 = GT
+          | fst (definedSymbol eq) == d2 = LT
+          | otherwise = walk eqs
       untypedEquations = eqEqn `map` equations
       fs = concatMap (\ e -> funs (lhs e) ++ funs (rhs e)) untypedEquations
       (ds,cs) = partition (isDefined . fst) (Map.toList sig)

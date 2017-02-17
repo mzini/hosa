@@ -1,5 +1,0 @@
-scanr f b [] = b : [];
-scanr f b (x : xs) = scanrHlp f x (scanr f b xs);
-scanrHlp f x (y : ys) = (f x y) : (y : ys);
-cons x xs = x : xs;
-main = scanr cons [];

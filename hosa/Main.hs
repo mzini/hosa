@@ -25,7 +25,6 @@ import qualified HoSA.Data.SizeType as SzT
 import           HoSA.Data.SizeType (SizeType (..), Schema, Type)
 import           GUBS hiding (Symbol, Variable, Var, definedSymbol)
 import qualified GUBS.Solve.SMT as SMT
-
 deriving instance Typeable SMT.Solver
 deriving instance Data SMT.Solver
 
@@ -48,8 +47,8 @@ defaultConfig =
        , input = def &= typFile &= argPos 0
        , solver = Z3 &= help "SMT solver (minismt, z3). Defaults to z3."
        , mains = Nothing &= help "List of analysed main functions."
-       , verbose = False
-       , analyse = Size &= help "Analysis objective (size, time)."
+       , verbose = False 
+       , analyse = Time &= help "Analysis objective (size, time). Defaults to time analysis."
        , smtStrategy = SCC  &= help "Constraint solving strategy (Simple, SCC). Defaults to SCC."
        , clength = 1 &= help "Length of call-site contexts. Defaults to 1." }
   &= help "Infer size-types for given ATRS"
@@ -69,7 +68,7 @@ constraintProcessor :: HoSA -> SOCS.Processor IO
 constraintProcessor cfg =
   case smtStrategy cfg of
     Simple -> simple
-    SCC -> timed $ withLog (try simplify) ==> try (exhaustive (logAs "SCC-DECOMPOSE" (sccDecompose simple)))
+    SCC -> timed $ withLog $ withLog (try simplify) ==> try (exhaustive (logAs "SCC-DECOMPOSE" (sccDecompose simple)))
   where
     millisecs = (*) (10^(3::Int))
     withLog p cs = 
@@ -305,6 +304,7 @@ infer sig p = generateConstraints >>= solveConstraints where
   solveConstraints cs = do
     pr <- reader constraintProcessor
     focs <- SOCS.toFOCS cs
+    status "Generated FOCS" (prettySexp (SOCS.toGubsCS focs))
     (esig,l) <- lift (lift (liftIO (SOCS.solveConstraints pr sig focs)))
     putExecLog [ Node "Solving Constraints" l ]
                  

@@ -83,7 +83,7 @@ ppair pa pb = parens $ do
   return (a,b)
 
 reservedWords :: [String]
-reservedWords = words "data if then else let be in ; = [ ] :: -> |"
+reservedWords = words "data if then else let be in ; = : [ ] :: -> |"
 
 ----------------------------------------------------------------------
 -- parsers
@@ -106,6 +106,9 @@ var v = return (Var v ())
 
 nilP :: Parser (UntypedExpression Symbol Variable)
 nilP = reserved "[]" >> (enil <$> freshLocation)
+
+consP :: Parser (UntypedExpression Symbol Variable)
+consP = parens (reserved ":") >> (Fun CONS () <$> freshLocation)
 
 lstP :: [UntypedExpression Symbol Variable] -> Parser (UntypedExpression Symbol Variable)
 lstP [] = enil <$> freshLocation
@@ -135,7 +138,7 @@ rhsP = expression where
 
   expression vs = (e `sepBy1` reserved ":") >>= lstP where
     e = foldl (Apply ()) <$> arg <*> many arg
-    arg = i vs <|> l vs <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
+    arg = i vs <|> l vs <|> try consP <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
 
   par vs = foldr1 (Pair ((),())) <$> parens (expression vs `sepBy1` comma)
     
