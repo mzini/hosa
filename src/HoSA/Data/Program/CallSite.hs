@@ -40,9 +40,10 @@ cap 1 f = f { csContext = Nothing }
 cap i f = f { csContext = cap (i-1) <$> csContext f }
 
 
-kca :: Eq f => Int -> CSAbstract f
+kca :: (IsSymbol f, Eq f) => Int -> CSAbstract f
 kca n (f,tpf,l) g 
     | firstOrder tpf = initial f
+    | isConstructor f = initial f
     | csSymbol g == f = g
     | otherwise = cap n (CtxSym f l (Just g))
   where
@@ -63,14 +64,9 @@ withCallContexts abstr p =
 
     gtypeOf f = signature p Map.! csSymbol f
       
-    push (g,tp,l) f
-      | isConstructor g = initial g
-      | otherwise       = abstr (g,tp,l) f
-
-  
     walk syms [] = Program { equations = concatMap definingEquation syms
                            , signature = sig
-                           , mainFns = initial `map` mainFns p} -- TODO
+                           , mainFns = initial `map` mainFns p}
       where
         sig = Map.fromList (ds ++ cs)
         ds = [ (f,substitute subst (gtypeOf f)) | (f,subst) <- syms, isDefined f ]
@@ -80,11 +76,11 @@ withCallContexts abstr p =
         Nothing -> walk seen fs
         Just seen' -> walk seen' (succs f ++ fs)
       
-    succs (f, subst) = [ (push (f',tp,l) f, fromJust (matchType tp tp'))
+    succs (f, subst) = [ (abstr (f',tp',l) f, fromJust (matchType tp tp'))
                        | (f',tp',l) <- foldl (flip tfunsDL) [] bodies
                        , let tp = signature p Map.! f']
       where
-        bodies = [ substitute subst (rhs (eqEqn eq))| eq <- equations p, defines f eq ]
+        bodies = [ substitute subst (rhs (eqEqn eq)) | eq <- equations p, defines f eq ]
       
     ins e [] = Just [e]
     ins e1@(g,substg) (e2@(f, substf):fs)
@@ -109,5 +105,5 @@ withCallContexts abstr p =
             | otherwise       = (initial g, tp)
           var v  tp           = (v,tp)
         annotatedRhs = mapExpression fun var . rhs . eqEqn where
-          fun g tp l = (push (g,tp,l) f, tp)
+          fun g tp l = (abstr (g,tp,l) f, tp)
           var v  tp  = (v,tp)

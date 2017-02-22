@@ -53,7 +53,7 @@ defaultConfig =
        , clength = 1 &= help "Length of call-site contexts. Defaults to 1." }
   &= help "Infer size-types for given ATRS"
 
-abstraction :: Eq f => HoSA -> CSAbstract f
+abstraction :: (Eq f, IsSymbol f) => HoSA -> CSAbstract f
 abstraction cfg = kca (clength cfg)
 
 startSymbols :: HoSA -> Maybe [Symbol]
@@ -86,6 +86,7 @@ constraintProcessor cfg =
         ==> try (smt' "SMT-MI(2)" smtOpts { degree = 2, shape = Mixed})
         ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
         ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
+        ==> try (smt' "SMT-MI(4)" smtOpts { degree = 4, shape = Mixed})        
     smt' n opts = logAs n $ timed $ smt (solver cfg) opts
     simplify = 
       logAs "Simplification" $
