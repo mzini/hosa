@@ -151,7 +151,7 @@ interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (inter
 interpretSig :: (Eq c, SemiRing c) => Interpretation c -> Signature f Term -> Signature f (PartialPolynomial c)
 interpretSig inter = Map.map (interpretType inter)
 
-instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, Max c, PP.Pretty c) => PP.Pretty (PartialPolynomial c) where
+instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, PP.Pretty c) => PP.Pretty (PartialPolynomial c) where
   pretty Nothing = PP.text "?"
   pretty (Just p) = PP.pretty p
   
@@ -159,7 +159,7 @@ instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, Max c, PP.Pretty c) => 
 type ConcreteSignature f = Signature f (PartialPolynomial Integer)
                                        
 solveConstraints :: MonadIO m => Processor m -> Signature f Term -> FOCS -> m (Either (ConcreteSignature f) (ConcreteSignature f), Forest String)
-solveConstraints p sig focs = first fromAnswer <$> (toGubsCS focs `GUBS.solveWith` p)
+solveConstraints p sig focs = first fromAnswer <$> (toGubsCS focs `GUBS.solveWithLog` p)
     where
       fromAnswer (GUBS.Sat i) = Right (interpretSig i sig)
       fromAnswer (GUBS.Open _ i) = Left (interpretSig i sig)
