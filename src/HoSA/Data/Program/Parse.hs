@@ -190,16 +190,17 @@ datatypeDeclP = do
 
     constrDeclP lhs vs = do
       n <- constructor
-      tpe <- foldr (:->) lhs <$> many typeP
+      tpe <- foldr (:->) lhs <$> many (try tyVar <|> try dataTypeConst <|> tyParens)
       return (n, tpe)
         where
           typeP = tyFun <?> "type"
           tyFun = foldr1 (:->) <$> tyNFun `sepBy1` reserved "->"
-          tyNFun = try dataTypeP
-                   <|> tyPair
+          tyNFun = try dataType
+                   <|> tyParens
                    <|> tyVar
-          dataTypeP = TyCon <$> typeName <*> many typeP
-          tyPair = foldr1 (:*:) <$> parens (typeP `sepBy1` comma)
+          dataTypeConst = TyCon <$> typeName <*> return []
+          dataType = TyCon <$> typeName <*> many typeP
+          tyParens = foldr1 (:*:) <$> parens (typeP `sepBy1` comma)
           tyVar = do
             v <- typeVarName 
             case lookup v vs of
