@@ -6,6 +6,7 @@ import           Control.Monad.Trace
 import           Control.Monad.Writer
 import qualified Data.Map as Map
 import           Data.Tree
+import           Data.Maybe (fromMaybe)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           HoSA.Utils
@@ -212,13 +213,14 @@ footprint = fpInfer
       return (si1 ++ si2, st1 ++ st2)
     fpMatch s          n                     = throwError (MatchFailure s n)
 
-obligations :: (Ord f, Ord v) => Signature f Ix.Term -> Program f v -> InferM f v [Obligation f v]
+obligations :: (PP.Pretty f, Ord f, Ord v) => Signature f Ix.Term -> Program f v -> InferM f v [Obligation f v]
 obligations sig p = mapM (obligationsFor . eqEqn) (equations p) where
   obligationsFor eq = do
     FP ctx tp <- footprint (annotate (lhs eq))
     return (Map.map Right ctx :- (annotate (rhs eq), tp))
   annotate = mapExpression fun var
-  fun f tp _ = ((f, sig Map.! f),tp)
+  fun f tp _ = ((f, fromMaybe err (Map.lookup f sig) ),tp) where
+    err = error $ "no sized type assigned to " ++ show (PP.pretty f)
   var v tp = (v,tp)
 
 skolemVar :: InferCG f v Ix.Term
