@@ -4,5 +4,5 @@ map f (x:xs) = (f x) : (map f xs);
 append [] ys = ys;
 append (x:xs) ys = x : (append xs ys);
 
-main xs ys = map (append xs) ys;
+prependAll xs ys = map (append xs) ys;
 
