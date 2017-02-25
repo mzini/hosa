@@ -1,0 +1,7 @@
+data Tree a = Leaf a | Branch (Tree a) (Tree a);
+data N = 0 | S N;
+
+fmap f (Leaf a) = Leaf (f a);
+fmap f (Branch t1 t2) = Branch (fmap f t1) (fmap f t2);
+
+main t = fmap S t;

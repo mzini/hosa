@@ -1,0 +1,13 @@
+data N = 0 | S N;
+
+gt 0 y = False;
+gt (S x) 0 = True;
+gt (S x) (S y) = gt x y;
+
+insert ord x [] = x : [];
+insert ord x (y:ys) = if ord x y then x : y : ys else y : insert ord x ys;
+
+sort ord [] = [];
+sort ord (x:xs) = insert ord x (sort ord xs);
+
+main xs = sort gt xs;

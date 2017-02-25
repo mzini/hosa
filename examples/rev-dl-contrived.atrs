@@ -1,0 +1,5 @@
+id z = z;
+comp f x g z = f x (g z);
+walk [] = id;
+walk (x:xs) = comp walk xs ((:) x);
+rev xs = walk xs [];

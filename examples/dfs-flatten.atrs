@@ -1,0 +1,10 @@
+data Tree a = Leaf a
+            | Node (Tree a) (Tree a);
+
+dfsAcc g (Leaf x) acc = g x acc;
+dfsAcc g (Node t1 t2) acc = dfsAcc g t2 (dfsAcc g t1 acc);
+
+revApp [] acc = acc;
+revApp (y : ys) acc = revApp ys (y : acc);
+
+flatten t = revApp (dfsAcc (:) t []) [];
