@@ -35,6 +35,7 @@ data HoSA = HoSA { width :: Int
                  , clength :: Int
                  , solver :: SMT.Solver
                  , verbose :: Bool
+                 , noansi :: Bool
                  , mains :: Maybe [String]
                  , smtStrategy :: SMTStrategy
                  , analyse :: AnalysisType
@@ -47,7 +48,8 @@ defaultConfig =
        , input = def &= typFile &= argPos 0
        , solver = Z3 &= help "SMT solver (minismt, z3). Defaults to z3."
        , mains = Nothing &= help "List of analysed main functions."
-       , verbose = False 
+       , verbose = False
+       , noansi = False &= help "Do not use ANSI formatting in output."
        , analyse = Time &= help "Analysis objective (size, time). Defaults to time analysis."
        , smtStrategy = SCC  &= help "Constraint solving strategy (Simple, SCC). Defaults to SCC."
        , clength = 1 &= help "Length of call-site contexts. Defaults to 1." }
@@ -261,10 +263,15 @@ type RunM = ExceptT Error (ReaderT HoSA (UniqueT IO))
 putExecLog :: PP.Pretty d => Forest d -> RunM ()
 putExecLog l = do 
    v <- reader verbose
-   when v (liftIO (putDocErrLn (ppForest l)))
+   na <- reader noansi
+   let d = ppForest l
+   when v (liftIO (putDocErrLn (if na then PP.plain d else d)))
 
 status :: PP.Pretty e => String -> e -> RunM ()
-status n e = liftIO (putDocLn (PP.text (n ++ ":") PP.<$> PP.indent 2 (PP.pretty e)) >> putStrLn "")
+status n e = do
+   na <- reader noansi
+   let d = PP.text (n ++ ":") PP.<$> PP.indent 2 (PP.pretty e)
+   liftIO (putDocLn (if na then PP.plain d else d) >> putStrLn "")
 
 ppForest :: PP.Pretty p => Forest p -> PP.Doc
 ppForest ts = PP.vcat [PP.text "+" PP.<+> ppTree t | t <- ts]
@@ -326,8 +333,9 @@ timeAnalysis p = do
   let (ticked,aux) = tickProgram p
   status "Instrumented program" ticked
   status "Auxiliary equations" aux
-  status "Abstract signature" (abstractSignature w)
-  infer (abstractSignature w) ticked >>= putSolution ticked
+  let sig = abstractSignature w
+  status "Template signature" sig
+  infer sig ticked >>= putSolution ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
     tickSchema = SzQArr [1] (SzCon "#" [] (Ix.bvar 1)) (SzCon "#" [] (Ix.Succ (Ix.bvar 1)))
@@ -348,8 +356,9 @@ sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Program f v -> RunM ()
 sizeAnalysis p = do
   w <- reader width
-  status "AbstractSignature" (abstractSignature w)
-  infer (abstractSignature w) p >>= putSolution p
+  let sig = abstractSignature w
+  status "Template signature" sig
+  infer sig p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))
   
