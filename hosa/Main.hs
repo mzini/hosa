@@ -312,7 +312,7 @@ infer sig p = generateConstraints >>= solveConstraints where
   solveConstraints cs = do
     pr <- reader constraintProcessor
     focs <- SOCS.toFOCS cs
-    status "Generated FOCS" (prettySexp (SOCS.toGubsCS focs))
+    -- status "Generated FOCS" (prettySexp (SOCS.toGubsCS focs))
     (esig,l) <- lift (lift (liftIO (SOCS.solveConstraints pr sig focs)))
     putExecLog [ Node "Solving Constraints" l ]
                  

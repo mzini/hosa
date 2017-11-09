@@ -127,7 +127,7 @@ translateLhs l t =  apply <$> renameHead l <*> return t where
     r = mapExpressionM (\ g _  _ -> constrSym g) (\ v tp -> pure (var v,tp)) `mapM` rest
   renameHead _ = error "translateLhs: non-proper lhs given" 
 
-translateRhs :: (Ord f, Eq v) => IsSymbol f => TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
+translateRhs :: (Ord f, Eq v) => TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateRhs e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) where
   translateK (Var v tp) t k = k (Var (var v) (translatedType tp)) t
   translateK (Fun f tp _) t k = do
@@ -137,7 +137,7 @@ translateRhs e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) 
     letp (apply f0 t) (ve,vc) <$> k (Var ve (translatedType tp)) (Var vc clockType)
   translateK (Pair _ e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
-    k2 e1' e2' t2 = k (pair e1' e2') t2 --TODO
+    k2 e1' e2' t2 = k (pair e1' e2') t2
   translateK (Apply _ e1 e2) t k = translateK e1 t k1 where
     k1 e1' t1 = translateK e2 t1 (k2 e1')
     k2 e1' e2' t2 = do
@@ -147,12 +147,14 @@ translateRhs e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) 
       letp (apply (apply e1' e2') t2) (ve,vc) <$> k (Var ve (translatedType tp2)) (Var vc clockType)
   translateK (If _ eg et ee) t k = translateK eg t k1 where
     k1 eg' t1 = ite eg' <$> translateK et t1 k <*> translateK ee t1 k
-  translateK _ _ _ = error "translateRhs: non-proper rhs given"
+  translateK (LetP _ e1 ((x,_),(y,_)) e2) t k = translateK e1 t k1 where
+    k1 e1' t1 = letp e1' (var x, var y) <$> translateK e2 t1 k
+  -- translateK _ _ _ = error "translateRhs: non-proper rhs given"
   
 translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
 translateEnv t env = Map.insert t clockType $ Map.fromList [ (IdentV w, translatedType tp) | (w, tp) <- Map.toList env ]
 
-translateEquation :: (Ord f, Ord v, IsSymbol f) => TypedEquation f v -> TickM f (TickedEquation f v)
+translateEquation :: (Ord f, Ord v) => TypedEquation f v -> TickM f (TickedEquation f v)
 translateEquation TypedEquation {..} = do
   resetFreshVar
   t <- freshVar
