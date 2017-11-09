@@ -3,7 +3,7 @@ packages:
 - '.'
 - location:
     git: git@github.com:mzini/monad-trace
-    commit: b75ce1b391cbdd14917feeee95166d55bef5c823
+    commit: 488bd2c09e51cbd16581cdd61fe13059ae62e45e
 - location:
     git: git@github.com:ComputationWithBoundedResources/gubs
     commit: d9bc7aa55a0e6dc6ca0b4ef1fac8eea7df7f481f
