@@ -23,17 +23,16 @@ import qualified HoSA.Data.Index as Ix
 import qualified HoSA.SizeType.SOConstraint as SOCS
 import qualified HoSA.Data.SizeType as SzT
 import           HoSA.Data.SizeType (SizeType (..), Schema, Type)
-import           GUBS hiding (Symbol, Variable, Var, definedSymbol)
+import           GUBS hiding (Symbol, Variable, Solver, SMTSolver, Z3, Var, definedSymbol)
 import qualified GUBS.Solve.SMT as SMT
-deriving instance Typeable SMT.Solver
-deriving instance Data SMT.Solver
 
+data SMTSolver = Z3 | MiniSMT deriving (Show, Data, Typeable)
 data SMTStrategy = Simple | SCC deriving (Show, Data, Typeable)
 data AnalysisType = Time | Size deriving (Show, Data, Typeable)
 
 data HoSA = HoSA { width :: Int
                  , clength :: Int
-                 , solver :: SMT.Solver
+                 , solver :: SMTSolver
                  , verbose :: Bool
                  , noansi :: Bool
                  , mains :: Maybe [String]
@@ -89,7 +88,9 @@ constraintProcessor cfg =
         ==> try (smt' "SMT-MMI(3)" smtOpts { degree = 3})
         ==> try (smt' "SMT-MI(3)" smtOpts { degree = 3, shape = Mixed})
         ==> try (smt' "SMT-MI(4)" smtOpts { degree = 4, shape = Mixed})        
-    smt' n opts = logAs n $ timed $ smt (solver cfg) opts
+    smt' n opts = logAs n $ timed $ smt (solver' cfg) opts
+    solver' (solver -> Z3) = SMT.Z3
+    solver' (solver -> MiniSMT) = SMT.MiniSmt
     simplify = 
       logAs "Simplification" $
         try instantiate
