@@ -5,7 +5,7 @@ packages:
     git: git@github.com:mzini/monad-trace
     commit: b75ce1b391cbdd14917feeee95166d55bef5c823
 - location:
-    git: git@github.com:mzini/gubs
+    git: git@github.com:ComputationWithBoundedResources/gubs
     commit: d9bc7aa55a0e6dc6ca0b4ef1fac8eea7df7f481f
 extra-deps:
 - smtlib2-1.0
