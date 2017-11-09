@@ -63,7 +63,7 @@ startSymbols cfg = map sym <$> mains cfg where
   sym n = Symbol { symName = n, defined = True }
 
 
-smtOpts :: SMTOpts
+smtOpts :: SMTOpts f
 smtOpts = SMT.defaultSMTOpts { minimize = tryM (exhaustiveM zeroOut) `andThenM` iterM 3 decreaseCoeffs }
           
 constraintProcessor :: HoSA -> SOCS.Processor IO
