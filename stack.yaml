@@ -15,4 +15,4 @@ extra-deps:
 - atto-lisp-0.2.2.2
 - data-fix-0.0.3
 - failure-0.2.0.3
-resolver: lts-7.11
+resolver: lts-9.12
