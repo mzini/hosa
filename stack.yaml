@@ -2,10 +2,10 @@ flags: {}
 packages:
 - '.'
 - location:
-    git: git@github.com:mzini/monad-trace
+    git: https://github.com/mzini/monad-trace.git
     commit: 488bd2c09e51cbd16581cdd61fe13059ae62e45e
 - location:
-    git: git@github.com:ComputationWithBoundedResources/gubs
+    git: https://github.com/ComputationWithBoundedResources/gubs.git
     commit: d9bc7aa55a0e6dc6ca0b4ef1fac8eea7df7f481f
 extra-deps:
 - smtlib2-1.0
