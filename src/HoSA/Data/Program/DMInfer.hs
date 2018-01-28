@@ -61,10 +61,18 @@ unifyM rl a tp1 tp2 =
 inferEquation :: (Ord v, Ord f, IsSymbol f) => UntypedEquation f v -> InferM f v (TypedEquation f v, TypeSubstitution)
 inferEquation rl = do
   (lhs', env1, subst1) <- infer Map.empty (lhs rl)
-  (rhs', env2, subst2) <- check env1 (rhs rl) (typeOf lhs')
-  return (TypedEquation env2 (Equation (substitute subst2 lhs') rhs') (typeOf rhs')
+  let Distribution d rss = rhs rl
+  (rss', env2, tp2, subst2) <- walkCheck [] env1 (typeOf lhs') identSubst rss
+  -- (rhss', env2, subst2) <- check env1 (rhs rl) (typeOf lhs')
+  return (TypedEquation env2 (Equation (substitute subst2 lhs') (Distribution d rss')) tp2
          , subst2 `o` subst1)
   where
+    walkCheck rss env tp subst [] = return (rss, env, tp, subst)
+    walkCheck rss env tp subst ((p,r):rs) = do
+      (r', env', subst') <- check env r tp
+      let rhss' = second (substitute subst) `map` rss
+      walkCheck ((p,r'):rhss') env' (substitute subst tp) (subst' `o` subst) rs
+    
     fromEnv env v = 
       case Map.lookup v env of
         Nothing -> do
@@ -128,7 +136,7 @@ callSCCs eqs = map flattenSCC sccs'
     sccs' = stronglyConnComp [ (eq, i, succs eq) | (i, eq) <- eeqs ]
     eeqs = zip [ 0::Int ..] eqs
     succs eq = [ j | (j, eq') <- eeqs
-                   , dsym eq' `elem` dsym eq : funs (rhs eq) ]
+                   , dsym eq' `elem` dsym eq : concatMap funs (rhss eq) ]
       where dsym = fst . definedSymbol
 
 inferTypes :: (Ord v, Ord f, IsSymbol f) => [f] -> Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    

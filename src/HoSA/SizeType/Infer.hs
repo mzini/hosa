@@ -1,5 +1,6 @@
 module HoSA.SizeType.Infer where
 
+import           Data.List (transpose)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.Trace
@@ -28,7 +29,7 @@ type SizeTypedExpression f v = TypedExpression (f,Schema Ix.Term) v
 
 data Footprint v = FP (Map.Map v (Schema Ix.Term)) (Type Ix.Term)
 
-data Obligation f v = TypingContext v :- (SizeTypedExpression f v,Type Ix.Term)
+data Obligation f v = TypingContext v :- (Distribution (SizeTypedExpression f v), Type Ix.Term)
 infixl 0 :-
 
 --------------------------------------------------------------------------------
@@ -102,6 +103,7 @@ data SzTypingError f v where
   IllformedRhs :: SizeTypedExpression f v -> SzTypingError f v
   IlltypedTerm :: SizeTypedExpression f v -> String -> SizeType knd Ix.Term -> SzTypingError f v
   MatchFailure :: SizeType knd Ix.Term -> SizeType knd' Ix.Term -> SzTypingError f v
+  UnsupportedDType :: Distribution (SizeType knd' Ix.Term) -> SzTypingError f v
   DeclarationMissing :: f -> SzTypingError f v
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (SzTypingError f v) where
@@ -111,6 +113,9 @@ instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (SzTypingError f v) where
   pretty (IllformedRhs t) =
     PP.hang 2 (PP.text "Illformed right-hand side encountered:"
                PP.</> PP.pretty t)
+  pretty (UnsupportedDType t) =
+    PP.hang 2 (PP.text "Unsupported type in distribution encountered:"
+               PP.</> PP.pretty t)    
   pretty (IlltypedTerm t s tp) =
     PP.hang 2
       (PP.text "Term" PP.<+> PP.squotes (PP.pretty t) PP.<> PP.text ""
@@ -217,7 +222,7 @@ obligations :: (PP.Pretty f, Ord f, Ord v) => Signature f Ix.Term -> Program f v
 obligations sig p = mapM (obligationsFor . eqEqn) (equations p) where
   obligationsFor eq = do
     FP ctx tp <- footprint (annotate (lhs eq))
-    return (Map.map Right ctx :- (annotate (rhs eq), tp))
+    return (Right `Map.map` ctx :- (annotate `fmap` rhs eq, tp))
   annotate = mapExpression fun var
   fun f tp _ = ((f, fromMaybe err (Map.lookup f sig) ),tp) where
     err = error $ "no sized type assigned to " ++ show (PP.pretty f)
@@ -247,6 +252,37 @@ soSubType (SzPair t1 t2)   = SzPair <$> soSubType t1 <*> soSubType t2
 soSubType (SzArr n p)      = SzArr <$> soSuperType n <*> soSubType p
 soSubType (SzQArr vs n p)  = SzQArr vs <$> soSuperType n <*> soSubType p
 
+
+subtypeOfD :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => Distribution (SizeType knd Ix.Term) -> SizeType knd Ix.Term -> InferCG f v TSubst
+Distribution _ [(_,tp1)] `subtypeOfD` tp2  = tp1 `subtypeOf_` tp2
+distr `subtypeOfD` tp = distr `subtypeOfD_` tp
+
+subtypeOfD_ :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => Distribution (SizeType knd Ix.Term) -> SizeType knd Ix.Term -> InferCG f v TSubst
+Distribution _ ls `subtypeOfD_` SzVar v2
+    | all (p . snd) ls = return [] where
+        p (SzVar v1) = v1 == v2
+        p _          = False
+Distribution denom ls `subtypeOfD_` SzPair t1 t2 = do
+  let d1 = Distribution denom [ (p,t') | (p,SzPair t' _) <- ls]
+  let d2 = Distribution denom [ (p, t') | (p,SzPair _ t') <- ls]
+  subst1 <- d1 `subtypeOfD_` t1
+  t2' <- substituteTyVars subst1 t2
+  d2' <- substituteTyVars subst1 `traverse` d2
+  d2' `subtypeOfD_` t2'
+         
+d@(Distribution denom ls) `subtypeOfD_` SzCon n ts2 ix2 = do
+  sig <- Map.filterWithKey (\ f _ -> isConstructor f) <$> simpleSignature
+  if null (contraVariant sig n ts2) then do
+    require (Ix.Mult denom ix2 :>=: Ix.Sum [ Ix.Mult p ix | (p, SzCon _ _ ix) <- ls])
+    let ds = [Distribution denom d' | d' <- transpose [ [(p,t) | t <- ts] | (p,SzCon _ ts _) <- ls]]
+    foldM (\ subst (da,t) -> do
+              da' <- substituteTyVars subst `traverse` da
+              t' <- substituteTyVars subst t
+              subst' <- da' `subtypeOfD_` t'
+              subst' `after` subst) [] (zip ds ts2)
+      
+  else throwError (UnsupportedDType d)
+d `subtypeOfD_` _ = throwError (UnsupportedDType d)
 
 subtypeOf :: (TSubstitute (SizeType knd Ix.Term), IsSymbol f) => SizeType knd Ix.Term -> SizeType knd Ix.Term -> InferCG f v TSubst
 t1 `subtypeOf` t2 = t1 `subtypeOf_` t2 -- logBlk (PP.pretty t1 PP.<+> PP.text "⊑" PP.<+> PP.pretty t2) $ 
@@ -337,15 +373,16 @@ inferSizeType_ ctx (LetP _ t1 ((x,_),(y,_)) t2) = do
     _ -> throwError (IlltypedTerm t1 "pair type" tp1)
 
 obligationToConstraints :: (IsSymbol f, PP.Pretty f, PP.Pretty v, Ord f, Ord v) => Obligation f v -> InferM f v SOCS
-obligationToConstraints ob@(ctx :- (t, tp)) =  logBlk ob $ execInferCG $ do 
-  (_,tp') <- inferSizeType ctx t
-  void (tp' `subtypeOf` tp)
+obligationToConstraints ob@(ctx :- (rs,tp)) =  logBlk ob $ execInferCG $ do
+  dtps <- ( \ r -> snd <$> inferSizeType ctx r) `mapM` rs
+  void (dtps `subtypeOfD` tp)
 
 generateConstraints :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
   Signature f Ix.Term -> Program f v -> UniqueT IO (Either (SzTypingError f v) SOCS, ExecutionLog)
 generateConstraints sig p = runInferM (signature p) $
   logBlk "Type Inference"
-    (obligations sig p >>= concatMapM obligationToConstraints)
+    (obligations
+ sig p >>= concatMapM obligationToConstraints)
 
 -- pretty printers
 --------------------------------------------------------------------------------
@@ -355,11 +392,18 @@ instance PP.Pretty v => PP.Pretty (TypingContext v) where
     | Map.null m = PP.text "Ø"
     | otherwise = PP.encloseSep PP.empty PP.empty (PP.text ", ") bindings where
         bindings = [ PP.pretty v PP.<+> PP.text ":" PP.<+> either PP.pretty PP.pretty e | (v,e) <- Map.toList m ]
-  
+
+instance PP.Pretty a => PP.Pretty (Distribution a) where
+  pretty (Distribution d ls) =
+    PP.encloseSep (PP.text "{") (PP.text "}") (PP.text ";")
+    [ppRatio p PP.<+> PP.text ":" PP.<+> PP.pretty a | (p,a) <- ls ]
+      where
+        ppRatio p = PP.int p PP.<> PP.text "/" PP.<> PP.int d
+
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Obligation f v) where
-  pretty (ctx :- (t, s)) = 
+  pretty (ctx :- (d, t)) = 
     PP.group (PP.nest 2 (PP.pretty ctx PP.<+> PP.text "⊦" 
-                         PP.<$> PP.nest 2 (PP.group (PP.pretty t PP.<$> PP.text ":" PP.<+> PP.pretty s))))
+                         PP.<$> PP.nest 2 (PP.group (PP.pretty d PP.<$> PP.text ":" PP.<+> PP.pretty t))))
 
 instance {-# OVERLAPPING #-} PP.Pretty TSubst where
   pretty [] = PP.text "Ø"

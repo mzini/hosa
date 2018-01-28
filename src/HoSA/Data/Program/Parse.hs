@@ -7,6 +7,8 @@ module HoSA.Data.Program.Parse
 
 where
 
+import Data.Char(digitToInt)
+import Data.List(foldl')
 import Text.Parsec
 import Text.ParserCombinators.Parsec (CharParser)
 
@@ -71,6 +73,9 @@ parens = between (char '(' >> notFollowedBy (char '*')) (lexeme (char ')'))
 
 comma :: Parser Char
 comma = lexeme (char ',')
+
+natural :: Parser Int
+natural = foldl' (\a i -> a * 10 + digitToInt i) 0 <$> many1 digit
 
 reserved :: String -> Parser ()
 reserved = void . lexeme . string
@@ -164,8 +169,21 @@ rhsP = expression where
     t2 <- expression (v1 : v2 : vs)
     return (LetP () t1 ((v1,()),(v2,())) t2)
 
+choiceP :: [Variable] -> Parser (Distribution (UntypedExpression Symbol Variable))
+choiceP vs = try multi <|> singleton where
+  multi = between (lexeme (char '{')) (lexeme (char '}')) $ do
+    cs <- flip sepEndBy1 (lexeme (char ';')) $ do
+      p <- lexeme natural
+      reserved ":"
+      t <- rhsP vs
+      return (p,t)
+    let s = sum [p | (p,_) <- cs]
+    return (Distribution s [(p, t) | (p,t) <- cs])
+  singleton = (Distribution 1 . replicate 1 .(1,)) <$> rhsP vs
+    
+
 eqP :: Parser (UntypedEquation Symbol Variable)
-eqP = do {l <- lhsP; reserved "="; r <- rhsP (fvars l); return (Equation l r); } <?> "equation"
+eqP = do {l <- lhsP; reserved "="; r <- choiceP (fvars l); return (Equation l r); } <?> "equation"
 
 eqsP :: Parser [UntypedEquation Symbol Variable]
 eqsP = eqP `endBy1` reserved ";"

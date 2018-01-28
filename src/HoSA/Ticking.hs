@@ -159,9 +159,9 @@ translateEquation TypedEquation {..} = do
   resetFreshVar
   t <- freshVar
   l' <- translateLhs (lhs eqEqn) (Var t clockType)
-  r' <- translateRhs (rhs eqEqn) (Var t clockType)
+  rs' <- flip translateRhs (Var t clockType) `mapM` (rhs eqEqn) 
   return TypedEquation { eqEnv = translateEnv t eqEnv
-                       , eqEqn = Equation l' r'
+                       , eqEqn = Equation l' rs'
                        , eqTpe = translatedType eqTpe :*: clockType }
 
 auxiliaryEquations :: (Ord f, IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
@@ -181,7 +181,7 @@ auxiliaryEquations ar (f,tpf) = mapM auxEquation [0 .. if isDefined f then arf -
           l = fromSexp fi (vs ++ [t])
           r = fromSexp fi' vs `pair` t
       return TypedEquation { eqEnv = Map.fromList [ (v,tpv) | Var v tpv <- t : vs ]
-                           , eqEqn = Equation l r 
+                           , eqEqn = Equation l (Distribution 1 [(1,r)]) 
                            , eqTpe = typeOf l }
 
 tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, TickedProgram f v)

@@ -1,6 +1,7 @@
 module HoSA.Data.Program.Equation
   (
     definedSymbol
+  , rhss
   )
 where
 
@@ -16,6 +17,10 @@ import HoSA.Data.Program.Expression
 
 definedSymbol :: Equation f v tp -> (f,tp)
 definedSymbol = fromJust . headSymbol . lhs
+
+rhss :: Equation f v tp -> [Expression f v tp]
+rhss (rhs -> Distribution _ l) = map snd l
+                           
 
 ----------------------------------------------------------------------
 -- substitutions

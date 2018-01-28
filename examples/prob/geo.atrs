@@ -1,0 +1,4 @@
+data N = Z | S N;
+
+w n = { 2 : n; 1 : w (S n) };
+

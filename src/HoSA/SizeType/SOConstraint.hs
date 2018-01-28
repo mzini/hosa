@@ -39,13 +39,12 @@ instance Monoid SOCS where
   SOCS cs1 ds1 `mappend` SOCS cs2 ds2 = SOCS (cs1 ++ cs2) (ds1 ++ ds2)
 
 
-
-
 -- reduction to first order problem
 
 vars :: MonadIO m => Term -> m [VarId]
 vars Zero = return []
 vars (Succ ix) = vars ix
+vars (Mult _ ix) = vars ix
 vars (Sum ixs) = concatMapM vars ixs
 vars (Fun _ ixs) = concatMapM vars ixs
 vars (Var (BVar _)) = error "HoSA.SOConstraint.vars: constraint contains bound variable"
@@ -118,6 +117,7 @@ toGubsCS = map gconstraint where
   -- gconstraint (l :=: r)  = gterm l GUBS.:=: gterm r
   gterm Zero           = zero
   gterm (Succ ix)      = gterm ix .+ fromNatural (1::Integer)
+  gterm (Mult n ix)    = fromNatural n .* gterm ix
   gterm (Sum ixs)      = sumA [gterm ix | ix <- ixs]
   gterm (Var (FVar v)) = GUBS.variable (V v)
   gterm (Var (BVar _)) = error "toCS: constraint list contains bound variable"
@@ -131,24 +131,25 @@ toGubsCS = map gconstraint where
 -- interpretation
 type PartialPolynomial c = Maybe (Polynomial c)
 
-interpretIx :: (Eq c, SemiRing c) => Interpretation c -> Term -> PartialPolynomial c
+interpretIx :: (IsNat c, Eq c, SemiRing c) => Interpretation c -> Term -> PartialPolynomial c
 interpretIx _ Zero            = return zero
 interpretIx _ (Var v)         = return (Poly.variable v)
 interpretIx inter (Sum ixs)   = sumA <$> (interpretIx inter `mapM` ixs)
+interpretIx inter (Mult n ix) = (.*) (fromNatural n) <$> interpretIx inter ix
 interpretIx inter (Succ ix)   = (.+) one <$> interpretIx inter ix
 interpretIx inter (Fun f ixs) = do
   p <- GUBS.get inter f (length ixs)
   GUBS.apply p <$> interpretIx inter `mapM` ixs
 interpretIx _     MVar{}      = error "cannot interpret meta-variable"
 
-interpretType :: (Eq c, SemiRing c) => Interpretation c -> SizeType knd Term -> SizeType knd (PartialPolynomial c)
+interpretType :: (IsNat c, Eq c, SemiRing c) => Interpretation c -> SizeType knd Term -> SizeType knd (PartialPolynomial c)
 interpretType _     (SzVar v)        = SzVar v
 interpretType inter (SzCon n ts ix)  = SzCon n (interpretType inter `map` ts) (interpretIx inter ix)
 interpretType inter (SzPair t1 t2)   = SzPair (interpretType inter t1) (interpretType inter t2)
 interpretType inter (SzArr n t)      = SzArr (interpretType inter n) (interpretType inter t)
 interpretType inter (SzQArr ixs n t) = SzQArr ixs (interpretType inter n) (interpretType inter t)
 
-interpretSig :: (Eq c, SemiRing c) => Interpretation c -> Signature f Term -> Signature f (PartialPolynomial c)
+interpretSig :: (IsNat c, Eq c, SemiRing c) => Interpretation c -> Signature f Term -> Signature f (PartialPolynomial c)
 interpretSig inter = Map.map (interpretType inter)
 
 instance {-# OVERLAPPING #-} (Eq c, IsNat c, SemiRing c, PP.Pretty c) => PP.Pretty (PartialPolynomial c) where

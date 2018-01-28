@@ -54,6 +54,7 @@ data Term =
   Zero
   | Succ Term
   | Sum [Term]
+  | Mult Int Term
   | Fun Sym [Term]
   | Var Var
   | MVar MetaVar
@@ -112,6 +113,7 @@ vars :: Term -> [Var]
 vars Zero = []
 vars (Succ ix) = vars ix
 vars (Sum ixs) = concatMap vars ixs
+vars (Mult _ ix) = vars ix
 vars (Fun _ ixs) = concatMap vars ixs
 vars (Var v) = [v]
 vars (MVar mv) = either err vars (unsafePeakMetaVar mv) where
@@ -127,6 +129,7 @@ fvars t = [ v | FVar v <- vars t]
 metaVars :: Term -> [MetaVar]
 metaVars Zero = []
 metaVars (Succ ix) = metaVars ix
+metaVars (Mult _ ix) = metaVars ix
 metaVars (Sum ixs) = concatMap metaVars ixs
 metaVars (Fun _ ixs) = concatMap metaVars ixs
 metaVars (Var (BVar _)) = []
@@ -158,6 +161,7 @@ instance PP.Pretty MetaVar where
 instance PP.Pretty Term where
   pretty Zero = PP.text "0"
   pretty (Succ ix) = prettyFn "s" [ix]
+  pretty (Mult i ix) = PP.pretty i PP.<+> PP.text "*" PP.<+> PP.parens (PP.pretty ix) where
   pretty (Sum ixs) = prettyFn "sum" ixs
   pretty (Fun sym as) = PP.pretty sym PP.<> prettyArgLst as
   pretty (Var v) = PP.pretty v
@@ -201,6 +205,7 @@ instance Substitutable Term where
   type Image Term = Term
   subst_ _ Zero        = Zero
   subst_ s (Succ ix)   = Succ (subst_ s ix)
+  subst_ s (Mult r ix) = Mult r (subst_ s ix)  
   subst_ s (Sum ixs)   = Sum (map (subst_ s) ixs)
   subst_ s (Fun f ixs) = Fun f (map (subst_ s) ixs)
   subst_ s (Var v)     = s v

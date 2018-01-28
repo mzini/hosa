@@ -11,6 +11,7 @@ module HoSA.Data.Program.Types
   , Location
   , Expression (..)
   , Equation (..)
+  , Distribution (..)
   , UntypedExpression
   , TypedExpression
     -- * Equation
@@ -64,7 +65,23 @@ data Expression f v tp =
   | If tp (Expression f v tp) (Expression f v tp) (Expression f v tp)
   | LetP tp (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)
 
-data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Expression f v tp }
+data Distribution a = Distribution { denom :: Int, dist :: [(Int, a)] }
+
+instance Functor Distribution where
+  fmap f (Distribution d l) = Distribution d [(p, f a) | (p, a) <- l]
+
+instance Foldable Distribution where
+  foldMap f (Distribution _ l) = foldMap (f . snd) l
+
+instance Traversable Distribution where
+  traverse f (Distribution d l) = Distribution d <$> traverse f' l where
+    f' (p,a) = (p,) <$> f a
+  
+
+instance TSubstitutable a => TSubstitutable (Distribution a) where
+  substitute s = fmap (substitute s)
+
+data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Distribution (Expression f v tp) }
 
 type UntypedExpression f v = Expression f v ()
 type UntypedEquation f v = Equation f v ()
