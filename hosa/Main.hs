@@ -181,11 +181,13 @@ abstractType width f stp = thrd <$> runUniqueT (annotatePositive 0 Set.empty stp
       (nvsp, pvsp, p') <- annotatePositive w (fvsn `Set.union` vs) p
       return (fvsn `Set.union` nvsp, pvsp, SzArr n' p')        
 
+clock :: ix -> SizeType knd ix
+clock = SzCon "#" []
+
 abstractTimeType :: (IsSymbol f, MonadUnique m) => Int -> f -> SimpleType -> m (Type Ix.Term, Ix.VarId)
 abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositive 0 Set.empty stp <*> freshVarId)
   where
     thrd (_,_,c) = c
-    clock = SzCon "#" []
     -- returns: negative free variables, positive free variables, type
     annotatePositive _ _  (TyVar v) = return (Set.empty, Set.empty, SzVar v)    
     annotatePositive w vs (TyCon n ts) = do
@@ -231,11 +233,10 @@ abstractTimeType width f stp = first thrd <$> runUniqueT ((,) <$> annotatePositi
       i <- freshVarId
       let ci = clock (Ix.bvar i)
       co <- case p of
-        -- _ :-> _             -> return (clock (Ix.bvar i))
         _ | isConstructor f -> return (clock (Ix.bvar i))
         _                   -> do
           ix <- lift (freshIxTerm pvsp)
-          return (clock (Ix.ixSum [ix,Ix.bvar i]))
+          return (clock (Ix.ixSum [ix, Ix.bvar i]))
           -- lift (clock <$> (freshIxTerm (Set.insert i pvsp)))
       return (Set.insert i (fvsn `Set.union` nvsp)
              , Set.insert i pvsp
@@ -339,17 +340,19 @@ timeAnalysis p = do
   infer sig ticked >>= putSolution ticked
   where
     abstractSignature w = Map.fromList ((Tick, tickSchema) : functionDecls w)
-    tickSchema = SzQArr [1] (SzCon "#" [] (Ix.bvar 1)) (SzCon "#" [] (Ix.Succ (Ix.bvar 1)))
+    tickSchema = SzQArr [1] (clock (Ix.bvar 1)) (clock (Ix.Succ (Ix.bvar 1)))
     functionDecls w = runUnique (decls w `concatMapM` Map.toList (signature p))
     decls w (f,tp) = do
       (t,v) <- abstractTimeType w f tp
-      let constrDecl = (TConstr f, close (suite t ar))
-          auxDecls = (TSymbol f 0, close (SzArr (clock v) (SzPair t (clock v))))
+      fo <- freshIxTerm Set.empty
+      let ci = clock (Ix.bvar v)
+          co = clock (Ix.Sum [fo,Ix.bvar v])
+          constrDecl = (TConstr f, close (suite t ar))
+          auxDecls = (TSymbol f 0, close (SzArr ci (SzPair t co)))
                      : [(TSymbol f (i + 1), close (suite t i)) | i <- [0 .. ar - 1]]
       return $ if isDefined f then auxDecls else constrDecl : auxDecls
         where
           ar = arity p f
-          clock = SzCon "#" [] . Ix.bvar
           suite t 0 = t
           suite (SzArr n (SzArr _ (SzPair p' _))) i = SzArr n (suite p' (i-1))
 
@@ -358,7 +361,7 @@ sizeAnalysis :: (IsSymbol f, Ord f, Ord v, PP.Pretty f, PP.Pretty v) =>
 sizeAnalysis p = do
   w <- reader width
   let sig = abstractSignature w
-  status "Template signature" sig
+  -- status "Template signature" sig
   infer sig p >>= putSolution p
   where
     abstractSignature w = runUnique (Map.traverseWithKey (abstractSchema w) (signature p))

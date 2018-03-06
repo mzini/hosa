@@ -70,8 +70,8 @@ inferEquation rl = do
     walkCheck rss env tp subst [] = return (rss, env, tp, subst)
     walkCheck rss env tp subst ((p,r):rs) = do
       (r', env', subst') <- check env r tp
-      let rhss' = second (substitute subst) `map` rss
-      walkCheck ((p,r'):rhss') env' (substitute subst tp) (subst' `o` subst) rs
+      let rss' = second (substitute subst') `map` rss
+      walkCheck ((p,r'):rss') env' (substitute subst tp) (subst' `o` subst) rs
     
     fromEnv env v = 
       case Map.lookup v env of

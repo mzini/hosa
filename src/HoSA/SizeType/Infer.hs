@@ -311,14 +311,21 @@ SzArr n p `subtypeOf_` SzArr m q = do
   q' <- substituteTyVars subst1 q
   subst2 <- p' `subtypeOf_` q'
   subst2 `after` subst1
-s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do 
-  (vs,t1) <- matrix s1
-  t2' <- instantiate s2
-  subst <- t1 `subtypeOf_` t2'
+s1@SzQArr{} `subtypeOf_` s2@SzQArr{} = do
+  t1 <- instantiate s1
+  (vs,t2) <- matrix s2
+  subst <- t1 `subtypeOf_` t2
   mvs1 <- metaVars <$> substituteTyVars subst t1
-  mvs2 <- metaVars <$> substituteTyVars subst t2'
+  mvs2 <- metaVars <$> substituteTyVars subst t2
   void (logBlk (PP.text "occurs check") (notOccur vs `mapM` (mvs1 ++ mvs2)))
   return subst
+  -- (vs,t1) <- matrix s1
+  -- t2' <- instantiate s2
+  -- subst <- t1 `subtypeOf_` t2'
+  -- mvs1 <- metaVars <$> substituteTyVars subst t1
+  -- mvs2 <- metaVars <$> substituteTyVars subst t2'
+  -- void (logBlk (PP.text "occurs check") (notOccur vs `mapM` (mvs1 ++ mvs2)))
+  -- return subst
 SzPair s1 s2 `subtypeOf_` SzPair t1 t2 = do
   subst1 <- s1 `subtypeOf_` t1
   s2' <- substituteTyVars subst1 s2
@@ -395,7 +402,7 @@ instance PP.Pretty v => PP.Pretty (TypingContext v) where
 
 instance PP.Pretty a => PP.Pretty (Distribution a) where
   pretty (Distribution d ls) =
-    PP.encloseSep (PP.text "{") (PP.text "}") (PP.text ";")
+    PP.encloseSep (PP.text "{") (PP.text "}") (PP.text "; ")
     [ppRatio p PP.<+> PP.text ":" PP.<+> PP.pretty a | (p,a) <- ls ]
       where
         ppRatio p = PP.int p PP.<> PP.text "/" PP.<> PP.int d

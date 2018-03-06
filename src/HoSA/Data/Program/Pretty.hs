@@ -70,7 +70,7 @@ prettyEquation ppFun ppVar eqn = pp False (lhs eqn) PP.<+> PP.text "=" PP.</> pp
 
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Expression f v tp) where
-  pretty = prettyExpression False PP.pretty PP.pretty
+  pretty = prettyExpression True PP.pretty PP.pretty
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Equation f v tp) where
   pretty = prettyEquation PP.pretty PP.pretty
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (TypedEquation f v) where

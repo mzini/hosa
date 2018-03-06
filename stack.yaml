@@ -6,7 +6,7 @@ packages:
     commit: 488bd2c09e51cbd16581cdd61fe13059ae62e45e
 - location:
     git: https://github.com/ComputationWithBoundedResources/gubs.git
-    commit: d9bc7aa55a0e6dc6ca0b4ef1fac8eea7df7f481f
+    commit: 749157a948d22dc098124572384f4f1a88d09bf9
 extra-deps:
 - smtlib2-1.0
 - smtlib2-pipe-1.0
