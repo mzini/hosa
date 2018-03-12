@@ -61,18 +61,10 @@ unifyM rl a tp1 tp2 =
 inferEquation :: (Ord v, Ord f, IsSymbol f) => UntypedEquation f v -> InferM f v (TypedEquation f v, TypeSubstitution)
 inferEquation rl = do
   (lhs', env1, subst1) <- infer Map.empty (lhs rl)
-  let Distribution d rss = rhs rl
-  (rss', env2, tp2, subst2) <- walkCheck [] env1 (typeOf lhs') identSubst rss
-  -- (rhss', env2, subst2) <- check env1 (rhs rl) (typeOf lhs')
-  return (TypedEquation env2 (Equation (substitute subst2 lhs') (Distribution d rss')) tp2
+  (rhs', env2, subst2) <- check env1 (rhs rl) (typeOf lhs')
+  return (TypedEquation env2 (Equation (substitute subst2 lhs') rhs') (typeOf rhs')
          , subst2 `o` subst1)
   where
-    walkCheck rss env tp subst [] = return (rss, env, tp, subst)
-    walkCheck rss env tp subst ((p,r):rs) = do
-      (r', env', subst') <- check env r tp
-      let rss' = second (substitute subst') `map` rss
-      walkCheck ((p,r'):rss') env' (substitute subst tp) (subst' `o` subst) rs
-    
     fromEnv env v = 
       case Map.lookup v env of
         Nothing -> do
@@ -84,8 +76,12 @@ inferEquation rl = do
       (t',env',subst') <- infer env t
       substr <- unifyM rl t (typeOf t') (substitute subst' tp)
       return (substitute substr t', substitute substr env', substr `o` subst')
-
-
+    checkL = walk [] identSubst where
+      walk tts subst env [] _ = return (tts,env,subst)
+      walk tts subst env (t:ts) tp = do
+        (t',env',subst') <- check env t tp
+        walk (t' : substitute subst' `map` tts) (subst' `o` subst) env' ts (substitute subst' tp)
+        
     infer env (Var v _) = do
       (env1,tp) <- fromEnv env v
       return (Var v tp, env1, identSubst)
@@ -107,6 +103,24 @@ inferEquation rl = do
       (tt, env2, subst2) <- infer env1 t
       (te, env3, subst3) <- infer env2 e
       return (ite (substitute (subst3 `o` subst2) tg) (substitute subst3 tt) te, env3, subst3 `o` subst2 `o` subst1)
+    infer env (Choice _ (Distribution d ps)) = do
+      let (rs,ts) = unzip ps
+      v <- freshTyExp
+      (tts, env', subst) <- checkL env ts v
+      return (choice (Distribution d (zip rs tts)), env',subst)
+    infer env (Case _ g cs) = do
+      (tg, env1, subst1) <- infer env g
+      v <- freshTyExp
+      (tcs,env2,subst2) <- walk [] env1 subst1 cs (typeOf tg) v
+      return (caseE (substitute subst2 tg) tcs, env2,subst2)
+      where
+        walk tcs e s [] _ _           = return (tcs,e,s)
+        walk tcs e s ((c,t):cs') tg tp = do
+          (tc,e1,s1) <- check Map.empty c tg
+          (tt,_,s2) <- check (e1 `Map.union` substitute s1 e) t (substitute s1 tp)
+          let s21 = s2 `o` s1
+          walk ((substitute s2 tc,tt) : substitute s21 `map` tcs) (substitute s2 e1) (s21 `o` s) cs' (substitute s21 tg) (substitute s21 tp)
+      
     infer env (LetP _ s1 ((x,_),(y,_)) s2) = do
       v1 <- freshTyExp
       v2 <- freshTyExp
@@ -136,7 +150,7 @@ callSCCs eqs = map flattenSCC sccs'
     sccs' = stronglyConnComp [ (eq, i, succs eq) | (i, eq) <- eeqs ]
     eeqs = zip [ 0::Int ..] eqs
     succs eq = [ j | (j, eq') <- eeqs
-                   , dsym eq' `elem` dsym eq : concatMap funs (rhss eq) ]
+                   , dsym eq' `elem` dsym eq : funs (rhs eq) ]
       where dsym = fst . definedSymbol
 
 inferTypes :: (Ord v, Ord f, IsSymbol f) => [f] -> Signature f -> [UntypedEquation f v] -> Either (TypingError f v) (Program f v)    

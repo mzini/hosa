@@ -63,6 +63,8 @@ data Expression f v tp =
   | Fun f tp Location
   | Apply tp (Expression f v tp) (Expression f v tp)
   | If tp (Expression f v tp) (Expression f v tp) (Expression f v tp)
+  | Case tp (Expression f v tp) [(Expression f v tp, Expression f v tp)]
+  | Choice tp (Distribution (Expression f v tp))
   | LetP tp (Expression f v tp) ((v,tp),(v,tp)) (Expression f v tp)
 
 data Distribution a = Distribution { denom :: Int, dist :: [(Int, a)] }
@@ -81,7 +83,7 @@ instance Traversable Distribution where
 instance TSubstitutable a => TSubstitutable (Distribution a) where
   substitute s = fmap (substitute s)
 
-data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Distribution (Expression f v tp) }
+data Equation f v tp = Equation { lhs :: Expression f v tp, rhs :: Expression f v tp }
 
 type UntypedExpression f v = Expression f v ()
 type UntypedEquation f v = Equation f v ()

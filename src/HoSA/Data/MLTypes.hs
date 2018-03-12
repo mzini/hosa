@@ -33,6 +33,7 @@ module HoSA.Data.MLTypes
   , TSubstitutable (..)
     -- * Unification and Matching
   , unifyType
+  , unifyTypes
   , antiUnifyType
   , matchType
     -- * Unification and Matching
@@ -191,6 +192,14 @@ nfvsDL (tp1 :-> tp2) = nfvsDL tp1 . pfvsDL tp2
 ----------------------------------------------------------------------
 -- substitutions
 ----------------------------------------------------------------------
+
+unifyTypes :: [SimpleType] -> Either (SimpleType,SimpleType) TypeSubstitution
+unifyTypes [] = return identSubst
+unifyTypes [_] = return identSubst
+unifyTypes (t1:t2:ts) = do
+  s <- unifyType [(t1,t2)]
+  s' <- unifyTypes (substitute s `map` (t2:ts))
+  return (s `o` s')
 
 unifyType :: [(SimpleType,SimpleType)] -> Either (SimpleType,SimpleType) TypeSubstitution
 unifyType = go identSubst where

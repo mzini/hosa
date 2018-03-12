@@ -58,15 +58,18 @@ prettyExpression showLabel ppFun ppVar = pp id where
     par (PP.align (PP.text "let" PP.<+> ppTuple (ppVar x, ppVar y)
                    PP.<+> PP.text "=" PP.<+> pp id t1
                    PP.<$> PP.hang 3 (PP.text "in" PP.<+> pp id t2)))
+  pp par (Case _ g cs) = 
+    par (PP.text "case" PP.<+> pp id g PP.<+> PP.text "of"
+        // PP.hang 2 (PP.vcat [ pp id p PP.<+> PP.text "->" PP.</> PP.hang 2 (pp id e) PP.<> PP.text ";"
+                              | (p,e) <- cs]))
+  pp _ (Choice _ (Distribution d ls)) =
+    PP.encloseSep (PP.text "{") (PP.text "}") (PP.text ";")
+    [ppRatio d p PP.<+> PP.text ":" PP.<+> pp id r | (p,r) <- ls ]
+  ppRatio d p = PP.int p PP.<> PP.text "/" PP.<> PP.int d
 
 prettyEquation :: (f -> PP.Doc) -> (v -> PP.Doc) -> Equation f v tp -> PP.Doc
-prettyEquation ppFun ppVar eqn = pp False (lhs eqn) PP.<+> PP.text "=" PP.</> ppDist (rhs eqn) where
+prettyEquation ppFun ppVar eqn = pp False (lhs eqn) PP.<+> PP.text "=" PP.</> pp False (rhs eqn) where
   pp showLabel = prettyExpression showLabel ppFun ppVar
-  ppDist (Distribution _ [(1,r)]) = pp False r
-  ppDist (Distribution d ls) =
-    PP.encloseSep (PP.text "{") (PP.text "}") (PP.text ";")
-    [ppRatio d p PP.<+> PP.text ":" PP.<+> pp False r | (p,r) <- ls ]
-  ppRatio d p = PP.int p PP.<> PP.text "/" PP.<> PP.int d
 
 
 instance (PP.Pretty f, PP.Pretty v) => PP.Pretty (Expression f v tp) where
@@ -105,7 +108,7 @@ prettyProgram Program{..} sig =
           | fst (definedSymbol eq) == d2 = LT
           | otherwise = walk eqs
       untypedEquations = eqEqn `map` equations
-      fs = concatMap (\ e -> funs (lhs e) ++ concatMap funs (rhss e)) untypedEquations
+      fs = concatMap (\ e -> funs (lhs e) ++ funs (rhs e)) untypedEquations
       (ds,cs) = partition (isDefined . fst) (Map.toList sig)
       
   

@@ -120,11 +120,14 @@ constrFun f = do
   Fun f' tp' <$> freshLoc
 
 -- rules
+
+translatePattern :: (Ord f, Eq v) => TypedExpression f v -> TickM f (TickedExpression f v)
+translatePattern = mapExpressionM (\ g _  _ -> constrSym g) (\ v tp -> pure (var v,tp))
+
 translateLhs :: (Ord f, Eq v) => TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
 translateLhs l t =  apply <$> renameHead l <*> return t where
-  renameHead (sexpr -> (Fun f _ _,rest)) = foldl apply <$> h <*> r where
+  renameHead (sexpr -> (Fun f _ _,rest)) = foldl apply <$> h <*> mapM translatePattern rest  where
     h = auxFun f (length rest)
-    r = mapExpressionM (\ g _  _ -> constrSym g) (\ v tp -> pure (var v,tp)) `mapM` rest
   renameHead _ = error "translateLhs: non-proper lhs given" 
 
 translateRhs :: (Ord f, Eq v) => TypedExpression f v -> TickedExpression f v -> TickM f (TickedExpression f v)
@@ -149,6 +152,10 @@ translateRhs e time = translateK e time (\ e' t' -> return (e' `pair` tick t')) 
     k1 eg' t1 = ite eg' <$> translateK et t1 k <*> translateK ee t1 k
   translateK (LetP _ e1 ((x,_),(y,_)) e2) t k = translateK e1 t k1 where
     k1 e1' t1 = letp e1' (var x, var y) <$> translateK e2 t1 k
+  translateK (Choice _ d) t k = choice <$> mapM (\ c -> translateK c t k) d
+  translateK (Case _ eg cs) t k = translateK eg t k1 where
+    k1 eg' t1 = caseE eg' <$> mapM f cs where
+      f (p,c) = (,) <$> translatePattern p <*> translateK c t1 k
   -- translateK _ _ _ = error "translateRhs: non-proper rhs given"
   
 translateEnv :: Ord v => TVariable v -> Environment v -> Environment (TVariable v)
@@ -159,9 +166,9 @@ translateEquation TypedEquation {..} = do
   resetFreshVar
   t <- freshVar
   l' <- translateLhs (lhs eqEqn) (Var t clockType)
-  rs' <- flip translateRhs (Var t clockType) `mapM` (rhs eqEqn) 
+  r' <- translateRhs (rhs eqEqn) (Var t clockType)
   return TypedEquation { eqEnv = translateEnv t eqEnv
-                       , eqEqn = Equation l' rs'
+                       , eqEqn = Equation l' r'
                        , eqTpe = translatedType eqTpe :*: clockType }
 
 auxiliaryEquations :: (Ord f, IsSymbol f, Ord v) => ArityDecl f -> (f,SimpleType) -> TickM f [TickedEquation f v]
@@ -181,7 +188,7 @@ auxiliaryEquations ar (f,tpf) = mapM auxEquation [0 .. if isDefined f then arf -
           l = fromSexp fi (vs ++ [t])
           r = fromSexp fi' vs `pair` t
       return TypedEquation { eqEnv = Map.fromList [ (v,tpv) | Var v tpv <- t : vs ]
-                           , eqEqn = Equation l (Distribution 1 [(1,r)]) 
+                           , eqEqn = Equation l r 
                            , eqTpe = typeOf l }
 
 tickProgram :: (Ord v, IsSymbol f, Ord f) => Program f v -> (TickedProgram f v, TickedProgram f v)

@@ -100,6 +100,7 @@ constraintProcessor cfg =
 -- abstract schemas
 ----------------------------------------------------------------------
 
+-- TODO: eliminate duplication
 freshIxTerm :: MonadUnique m => Set.Set Ix.VarId -> m Ix.Term
 freshIxTerm vs = do
   f <- Ix.Sym Nothing <$> unique

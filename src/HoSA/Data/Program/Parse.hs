@@ -88,7 +88,7 @@ ppair pa pb = parens $ do
   return (a,b)
 
 reservedWords :: [String]
-reservedWords = words "data if then else let be in ; = : [ ] :: -> |"
+reservedWords = words "data if then else let be in case of ; = : [ ] :: -> | { }"
 
 ----------------------------------------------------------------------
 -- parsers
@@ -120,30 +120,27 @@ lstP [] = enil <$> freshLocation
 lstP [e] = return e
 lstP (e:es') = econs <$> freshLocation <*> return e <*> lstP es'
 
+applicationP :: Parser (UntypedExpression Symbol Variable) -> Parser (UntypedExpression Symbol Variable) -> Parser (UntypedExpression Symbol Variable)
+applicationP h rest = foldl (Apply ()) <$> h <*> many rest
+
+patternP :: Parser (UntypedExpression Symbol Variable) 
+patternP = (p `sepBy1` reserved ":") >>= lstP where
+  p = try nilP <|> try v <|> par <|> applicationP c patternP
+  par = foldr1 (Pair ((),())) <$>
+    (try (reserved "(") *> sepBy1 patternP comma  <* reserved ")")
+  c = (constructor >>= fun) <?> "constructor"
+  v = (variable >>= var) <?> "variable"
   
 lhsP :: Parser (UntypedExpression Symbol Variable)
-lhsP = application (s <?> "function") arg where
-  
-  application h rest = foldl (Apply ()) <$> h <*> many rest
-  
-  arg = (p `sepBy1` reserved ":") >>= lstP
-  
-  p = try nilP <|> try c <|> try v <|> par 
-
-  par = foldr1 (Pair ((),())) <$> parens (application arg arg `sepBy1` comma)
-  
-  s = (symbol >>= fun) <?> "function symbol"
-  
-  c = (constructor >>= fun) <?> "constructor"
-  
-  v = (variable >>= var) <?> "variable"
+lhsP = applicationP (s <?> "function") patternP where
+  s = (symbol >>= fun) <?> "function symbol"  
 
 rhsP :: [Variable] -> Parser (UntypedExpression Symbol Variable)
 rhsP = expression where
 
   expression vs = (e `sepBy1` reserved ":") >>= lstP where
     e = foldl (Apply ()) <$> arg <*> many arg
-    arg = i vs <|> l vs <|> try consP <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
+    arg = i vs <|> l vs <|> ch vs <|> ca vs <|> try consP <|> try nilP <|> try c <|> try (v vs) <|> try s <|> par vs
 
   par vs = foldr1 (Pair ((),())) <$> parens (expression vs `sepBy1` comma)
     
@@ -169,27 +166,36 @@ rhsP = expression where
     t2 <- expression (v1 : v2 : vs)
     return (LetP () t1 ((v1,()),(v2,())) t2)
 
-choiceP :: [Variable] -> Parser (Distribution (UntypedExpression Symbol Variable))
-choiceP vs = try multi <|> singleton where
-  multi = between (lexeme (char '{')) (lexeme (char '}')) $ do
+  ca vs = do
+    try (reserved "case")
+    g <- expression vs
+    reserved "of"
+    cs <- many1 $ do
+      reserved "|"
+      p <- patternP
+      reserved "->"
+      e <- expression (fvars p ++ vs)
+      return (p,e)
+    return (Case () g cs)
+
+  ch vs = do
+    try (reserved "{")
     cs <- flip sepEndBy1 (lexeme (char ';')) $ do
       p <- lexeme natural
       reserved ":"
       t <- rhsP vs
       return (p,t)
-    let s = sum [p | (p,_) <- cs]
-    return (Distribution s [(p, t) | (p,t) <- cs])
-  singleton = (Distribution 1 . replicate 1 .(1,)) <$> rhsP vs
+    reserved "}"
+    return (Choice () (Distribution (sum [p | (p,_) <- cs]) [(p, t) | (p,t) <- cs]))
     
 
 eqP :: Parser (UntypedEquation Symbol Variable)
-eqP = do {l <- lhsP; reserved "="; r <- choiceP (fvars l); return (Equation l r); } <?> "equation"
+eqP = do {l <- lhsP; reserved "="; r <- rhsP (fvars l); return (Equation l r); } <?> "equation"
 
 eqsP :: Parser [UntypedEquation Symbol Variable]
 eqsP = eqP `endBy1` reserved ";"
 
 -- types
-
   
 datatypeDeclP :: Parser (Environment Symbol)
 datatypeDeclP = do
@@ -224,9 +230,6 @@ datatypeDeclP = do
             case lookup v vs of
               Just vid -> return vid
               Nothing -> unexpected ("undeclared variable in data type declaration: " ++ show v)
-
-
--- 
 
 fromFile :: MonadIO m => FilePath -> m (Either ParseError (Environment Symbol, [UntypedEquation Symbol Variable]))
 fromFile file = runParser parser (uniqueFromInt 0) sn <$> liftIO (readFile file) where

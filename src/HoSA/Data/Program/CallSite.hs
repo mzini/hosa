@@ -80,9 +80,8 @@ withCallContexts abstr p =
                        | (f',tp',l) <- foldl (flip tfunsDL) [] bodies
                        , let tp = signature p Map.! f']
       where
-        bodies = [ substitute subst r
-                 | eq <- equations p, defines f eq
-                 , r <- rhss (eqEqn eq) ]
+        bodies = [ substitute subst (rhs (eqEqn eq))
+                 | eq <- equations p, defines f eq]
       
     ins e [] = Just [e]
     ins e1@(g,substg) (e2@(f, substf):fs)
@@ -106,6 +105,6 @@ withCallContexts abstr p =
             | g == csSymbol f = (f,tp)
             | otherwise       = (initial g, tp)
           var v  tp           = (v,tp)
-        annotatedRhs = fmap (mapExpression fun var) . rhs . eqEqn where
+        annotatedRhs = mapExpression fun var . rhs . eqEqn where
           fun g tp l = (abstr (g,tp,l) f, tp)
           var v  tp  = (v,tp)

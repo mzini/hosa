@@ -91,9 +91,6 @@ traverseB = walk [] where
   walk bv f (SzQArr vs n p)  = SzQArr vs <$> walk bv' f n <*> walk bv' f p
     where bv' = vs ++ bv
 
-
-type TypeOrSchema ix = Either (Type ix) (Schema ix)
-
 instance Ix.Substitutable (SizeType knd Ix.Term) where
   type Image (SizeType knd Ix.Term) = Ix.Term
   subst_ _ (SzVar v)       = SzVar v
