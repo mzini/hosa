@@ -4,9 +4,11 @@ packages:
 - location:
     git: https://github.com/mzini/monad-trace.git
     commit: 488bd2c09e51cbd16581cdd61fe13059ae62e45e
+  extra-dep: true
 - location:
     git: https://github.com/ComputationWithBoundedResources/gubs.git
     commit: 749157a948d22dc098124572384f4f1a88d09bf9
+  extra-dep: true
 extra-deps:
 - smtlib2-1.0
 - smtlib2-pipe-1.0
